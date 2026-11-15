@@ -1,0 +1,168 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:v="using:Blockplan.Views"
+        xmlns:local="using:Blockplan"
+        x:Class="Blockplan.MainWindow"
+        Title="Blockplan" Width="1440" Height="900" MinWidth="980" MinHeight="600"
+        WindowStartupLocation="CenterScreen" Icon="/Assets/blockplan.ico">
+  <Window.Styles>
+    <Style Selector="TextBlock.h">
+      <Setter Property="FontSize" Value="11"/><Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/><Setter Property="LetterSpacing" Value="1"/>
+    </Style>
+    <Style Selector="TextBlock.note">
+      <Setter Property="FontSize" Value="12"/><Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/><Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style Selector="ToggleButton.nav">
+      <Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Height" Value="40"/><Setter Property="Padding" Value="12,0"/><Setter Property="FontSize" Value="14"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,0,3"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="10"/>
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource CardBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="12"/><Setter Property="Padding" Value="14"/>
+    </Style>
+    <Style Selector="Border.glass">
+      <Setter Property="Background" Value="#D80D120F"/><Setter Property="CornerRadius" Value="8"/><Setter Property="Padding" Value="10,5"/>
+    </Style>
+  </Window.Styles>
+
+  <Grid ColumnDefinitions="236,*,300">
+    <!-- Navigation links -->
+    <Border Grid.Column="0" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,1,0">
+      <DockPanel Margin="14,18,14,16" LastChildFill="False">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="11" Margin="6,0,0,18">
+          <Image Source="/Assets/blockplan.png" Width="32" Height="32" RenderOptions.BitmapInterpolationMode="None"/>
+          <StackPanel>
+            <TextBlock Text="Blockplan" FontSize="22" FontWeight="Bold"/>
+            <TextBlock Text="Bauplaner für Minecraft" Classes="note" FontSize="11"/>
+          </StackPanel>
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Top" Text="ANSICHTEN" Classes="h" Margin="10,0,0,6"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="Nav2D" Classes="nav" Content="▦  2D-Plan" IsChecked="True"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="Nav3D" Classes="nav" Content="⬢  3D-Ansicht"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="NavMat" Classes="nav" Content="☰  Materialliste"/>
+        <Border DockPanel.Dock="Top" Margin="0,14,0,0" Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="12,10">
+          <TextBlock x:Name="ViewHint" Classes="note" Text="Ziehen = verschieben · Mausrad = zoomen"/>
+        </Border>
+
+        <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+          <TextBlock Text="PROJEKT" Classes="h" Margin="4,0,0,0"/>
+          <ComboBox x:Name="ProjSel" HorizontalAlignment="Stretch" Height="38" FontWeight="SemiBold"/>
+          <Button x:Name="BtnOpen" Classes="accent" Content="Schematic öffnen …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="40"/>
+          <Button x:Name="BtnImport" Content="Aus Artefakt importieren …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="36"/>
+          <Border Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="10,8" Margin="0,4,0,0">
+            <StackPanel Spacing="6">
+              <TextBlock Text="MINECRAFT-TEXTUREN" Classes="h"/>
+              <TextBlock x:Name="TexInfo" Classes="note" Text="Suche Minecraft …"/>
+              <Button x:Name="BtnJar" Content="Andere .jar wählen …" FontSize="12" Padding="8,3"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- Arbeitsfläche -->
+    <Grid Grid.Column="1" x:Name="Stage">
+      <v:Plan2D x:Name="Plan"/>
+      <v:View3D x:Name="View3" IsVisible="False"/>
+      <Border x:Name="MatPage" IsVisible="False" Background="{DynamicResource BgBrush}" Padding="24">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,14">
+            <TextBlock x:Name="MatTitle" Text="Materialliste" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock x:Name="MatSub" Classes="note"/>
+            <TextBox x:Name="MatSearch" PlaceholderText="Block suchen …" Width="280" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+          </StackPanel>
+          <Border Classes="card" Padding="0">
+            <ListBox x:Name="MatList" Background="Transparent">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="local:MatRow">
+                  <Grid ColumnDefinitions="28,*,110,130" Height="30">
+                    <Image Grid.Column="0" Source="{Binding Icon}" Width="22" Height="22" RenderOptions.BitmapInterpolationMode="None"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
+                      <TextBlock Text="{Binding Name}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding CountText}" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas,monospace"/>
+                    <TextBlock Grid.Column="3" Text="{Binding StackText}" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Border>
+        </DockPanel>
+      </Border>
+
+      <Border x:Name="HoverBox" Classes="glass" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12" IsVisible="False">
+        <TextBlock x:Name="HoverText" Foreground="White" FontSize="12"/>
+      </Border>
+      <Border x:Name="StatusBox" Classes="glass" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="12" IsVisible="False">
+        <TextBlock x:Name="StatusText" Foreground="#C8D2CB" FontSize="11.5"/>
+      </Border>
+      <Border x:Name="BusyBox" IsVisible="False" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource CardBrush}"
+              BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="14" Padding="22,16" MinWidth="300" BoxShadow="0 18 50 0 #59000000">
+        <StackPanel Spacing="8">
+          <TextBlock x:Name="BusyText" FontWeight="SemiBold" Text="Lade …"/>
+          <ProgressBar IsIndeterminate="True" Height="4"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- Menü rechts -->
+    <Border Grid.Column="2" Background="{DynamicResource BgBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1,0,0,0">
+      <ScrollViewer>
+        <StackPanel Margin="14" Spacing="12">
+          <Border Classes="card">
+            <StackPanel Spacing="8">
+              <TextBlock Text="ANSICHT" Classes="h"/>
+              <StackPanel Orientation="Horizontal" Spacing="6" x:Name="ModeRow">
+                <RadioButton x:Name="ModeTop" Content="Draufsicht" IsChecked="True" GroupName="m"/>
+                <RadioButton x:Name="ModeLayer" Content="Eine Schicht" GroupName="m"/>
+              </StackPanel>
+              <StackPanel x:Name="LayerRow" Spacing="4" IsVisible="False">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="Schicht" Classes="note" VerticalAlignment="Center"/>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                    <Button x:Name="LayerDown" Content="◀" Padding="8,2"/>
+                    <TextBlock x:Name="LayerVal" FontFamily="Consolas,monospace" VerticalAlignment="Center" MinWidth="70" TextAlignment="Center"/>
+                    <Button x:Name="LayerUp" Content="▶" Padding="8,2"/>
+                  </StackPanel>
+                </Grid>
+                <Slider x:Name="LayerSlider" Minimum="0" Maximum="1" TickFrequency="1" IsSnapToTickEnabled="True"/>
+              </StackPanel>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Zeigen bis Höhe" Classes="note" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" x:Name="CutVal" FontFamily="Consolas,monospace"/>
+              </Grid>
+              <Slider x:Name="CutSlider" Minimum="0" Maximum="1" TickFrequency="1" IsSnapToTickEnabled="True"/>
+              <Button x:Name="BtnFit" Content="Ansicht zurücksetzen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card">
+            <StackPanel Spacing="8">
+              <TextBlock Text="PROJEKT" Classes="h"/>
+              <TextBlock Text="Name" Classes="note"/>
+              <TextBox x:Name="ProjName"/>
+              <TextBlock x:Name="ProjSize" Classes="note"/>
+              <TextBlock Text="Startecke im Spiel (Nordwest, unten)" Classes="note" Margin="0,6,0,0"/>
+              <Grid ColumnDefinitions="*,6,*,6,*">
+                <NumericUpDown Grid.Column="0" x:Name="OrX" FormatString="0" ShowButtonSpinner="False" PlaceholderText="X"/>
+                <NumericUpDown Grid.Column="2" x:Name="OrY" FormatString="0" ShowButtonSpinner="False" PlaceholderText="Y"/>
+                <NumericUpDown Grid.Column="4" x:Name="OrZ" FormatString="0" ShowButtonSpinner="False" PlaceholderText="Z"/>
+              </Grid>
+              <Button x:Name="BtnDelete" Content="Projekt löschen" Foreground="{DynamicResource DangerBrush}" Margin="0,6,0,0"/>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Text="SPEICHER" Classes="h"/>
+              <TextBlock x:Name="DbInfo" Classes="note"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+  </Grid>
+</Window>

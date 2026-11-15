@@ -1,0 +1,50 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Blockplan.App"
+             RequestedThemeVariant="Default">
+  <!-- Hell oder dunkel wie Windows; ein Akzent (Magenta), Grautöne leicht ins Grün gezogen -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="BgBrush" Color="#EEF1ED"/>
+          <SolidColorBrush x:Key="PanelBrush" Color="#FAFBF9"/>
+          <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="SunkBrush" Color="#E5E9E3"/>
+          <SolidColorBrush x:Key="LineBrush" Color="#D7DDD5"/>
+          <SolidColorBrush x:Key="MutedBrush" Color="#5A665E"/>
+          <SolidColorBrush x:Key="DangerBrush" Color="#B3302A"/>
+          <Color x:Key="SystemAccentColor">#C22D6B</Color>
+          <SolidColorBrush x:Key="AccentBrush" Color="#C22D6B"/>
+          <Color x:Key="SystemAccentColorDark1">#A92359</Color>
+          <Color x:Key="SystemAccentColorLight1">#D24A82</Color>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="BgBrush" Color="#0D110F"/>
+          <SolidColorBrush x:Key="PanelBrush" Color="#131916"/>
+          <SolidColorBrush x:Key="CardBrush" Color="#19201C"/>
+          <SolidColorBrush x:Key="SunkBrush" Color="#0A0D0B"/>
+          <SolidColorBrush x:Key="LineBrush" Color="#232C27"/>
+          <SolidColorBrush x:Key="MutedBrush" Color="#94A198"/>
+          <SolidColorBrush x:Key="DangerBrush" Color="#EC6F66"/>
+          <Color x:Key="SystemAccentColor">#EC5F9B</Color>
+          <SolidColorBrush x:Key="AccentBrush" Color="#EC5F9B"/>
+          <Color x:Key="SystemAccentColorDark1">#D9488A</Color>
+          <Color x:Key="SystemAccentColorLight1">#F37AAD</Color>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Light" Accent="#C22D6B" RegionColor="#FAFBF9"/>
+        <ColorPaletteResources x:Key="Dark" Accent="#EC5F9B" RegionColor="#131916"/>
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <Style Selector="ToggleButton.nav:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+  </Application.Styles>
+</Application>
