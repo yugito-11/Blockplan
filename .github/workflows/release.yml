@@ -1,9 +1,11 @@
 name: Windows-Version bauen
 
-# Baut Blockplan.exe und veröffentlicht sie als Release, sobald ein Versions-Tag (z. B. v1.0.1) hochgeladen wird.
+# Baut Blockplan.exe bei jeder Änderung am Programm. Ist die Version (<Version> in Blockplan.csproj)
+# neu, wird sie als Release v<Version> veröffentlicht; sonst gibt es die .exe nur als Build-Ergebnis.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["src/**", ".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
@@ -22,13 +24,14 @@ jobs:
           dotnet publish src/Blockplan -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true -p:DebugType=none -o out
-      - name: Release veröffentlichen
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Release veröffentlichen (nur bei neuer Version)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" out/Blockplan.exe \
-            --title "Blockplan ${GITHUB_REF_NAME#v}" \
+          VER=$(grep -oP '(?<=<Version>)[^<]+' src/Blockplan/Blockplan.csproj)
+          if gh release view "v$VER" >/dev/null 2>&1; then echo "Release v$VER gibt es schon."; exit 0; fi
+          gh release create "v$VER" out/Blockplan.exe --target "$GITHUB_SHA" \
+            --title "Blockplan $VER" \
             --notes "Herunterladen: Blockplan.exe unten anklicken, speichern, doppelklicken. Windows warnt beim ersten Start (nicht signiert): „Weitere Informationen“ → „Trotzdem ausführen“."
       - uses: actions/upload-artifact@v4
         with:
