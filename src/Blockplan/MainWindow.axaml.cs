@@ -45,6 +45,7 @@ public partial class MainWindow : Window
         BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
         BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
+        BtnSnow.Click += async (_, _) => await RemoveSnow();
         BtnFit.Click += (_, _) => { Plan.ResetView(); View3.ResetView(); };
         ProjSel.SelectionChanged += async (_, _) => { if (!loadingUi && ProjSel.SelectedItem is ProjectInfo pi && pi.Id != project?.Id) await OpenProject(pi.Id); };
         ModeTop.IsCheckedChanged += (_, _) => ApplyView(); ModeLayer.IsCheckedChanged += (_, _) => ApplyView();
@@ -259,6 +260,7 @@ public partial class MainWindow : Window
         RefreshList();
         ApplyProjectToViews(refit);
         ApplyView();
+        UpdateSnowInfo();
         if (MatPage.IsVisible) BuildMaterials();
     }
 
@@ -312,7 +314,7 @@ public partial class MainWindow : Window
         Busy("Übernehme Blöcke …");
         try
         {
-            var p = await Task.Run(() => { var pr = SchematicReader.ToProject(s, r.X0, r.Y0, r.Z0, r.X1, r.Y1, r.Z1, r.Dewater, r.Plants, r.Rot); store.Save(pr); return pr; });
+            var p = await Task.Run(() => { var pr = SchematicReader.ToProject(s, r.X0, r.Y0, r.Z0, r.X1, r.Y1, r.Z1, r.Dewater, r.Plants, r.Rot, r.Desnow, r.SnowBlocks); store.Save(pr); return pr; });
             s.Cells = Array.Empty<ushort>(); GC.Collect();
             SetProject(p, true);
         }
@@ -362,6 +364,28 @@ public partial class MainWindow : Window
         var next = store.List().FirstOrDefault();
         RefreshList();
         if (next != null) await OpenProject(next.Id); else ShowEmpty();
+    }
+
+    /* ---------- Schnee aus einem geladenen Projekt entfernen ---------- */
+    void UpdateSnowInfo()
+    {
+        if (project == null) { SnowRow.IsVisible = false; return; }
+        long cover = 0, blocks = 0, snowy = 0;
+        foreach (var (v, c) in project.CountBlocks()) { int k = SchematicReader.SnowKind(v); if (k == 1) cover += c; else if (k == 2) blocks += c; else if (k == 3) snowy += c; }
+        SnowRow.IsVisible = cover + blocks + snowy > 0;
+        SnowInfo.Text = $"Im Projekt: {cover:N0} Schneedecken, {snowy:N0} verschneite Blöcke, {blocks:N0} Schneeblöcke.";
+        SnowBlocksChk.IsVisible = blocks > 0;
+    }
+
+    async Task RemoveSnow()
+    {
+        var p = project; if (p == null) return;
+        bool blocks = SnowBlocksChk.IsChecked == true;
+        Busy("Entferne Schnee …");
+        long n = await Task.Run(() => { var c = p.Replace(v => SchematicReader.Desnow(v, blocks)); store.Save(p); return c; });
+        Busy(null);
+        SetProject(p, false);
+        ProjSize.Text += $" · {n:N0} Schneeblöcke entfernt bzw. aufgetaut";
     }
 
     /* ---------- Materialliste ---------- */

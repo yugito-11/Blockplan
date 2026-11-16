@@ -37,6 +37,20 @@ public static class SelfTest
             var ent = Project.FromJson(File.ReadAllText(Path.Combine(dir, "enterprise.json")));
             Ok(ent.W == 203 && ent.MaxY() > 0, $"Enterprise {ent.W}x{ent.D}x{ent.H}, {ent.CountBlocks().Count} Blockzustände");
 
+            // Schnee entfernen: Decke weg, Gras auftauen, Schneeblock nur auf Wunsch
+            var sp = new Project { W = 3, D = 1, H = 2, Cells = new ushort[6] };
+            sp.Cells[0] = (ushort)Blocks.Ensure("grass_block[snowy=true]"); sp.Cells[3] = (ushort)Blocks.Ensure("snow[layers=1]");
+            sp.Cells[1] = (ushort)Blocks.Ensure("snow_block"); sp.Cells[2] = (ushort)Blocks.Ensure("grass_block[snowy=true]"); sp.Cells[5] = (ushort)Blocks.Ensure("powder_snow");
+            long ch = sp.Replace(v => SchematicReader.Desnow(v, false));
+            Ok(ch == 4 && Blocks.Get(sp.Cells[0]).Key == "grass_block[snowy=false]" && sp.Cells[3] == 0 && sp.Cells[5] == 0 && Blocks.Get(sp.Cells[1]).Key == "snow_block" && sp.Cells[2] == sp.Cells[0],
+               $"Schnee entfernen: {ch} Felder geändert, Gras {Blocks.Get(sp.Cells[0]).Key}, Schneeblock bleibt");
+            sp.Replace(v => SchematicReader.Desnow(v, true)); Ok(sp.Cells[1] == 0, "Schneeblöcke auf Wunsch entfernt");
+            var bnr = SchematicReader.Load(Path.Combine(dir, "banner_v3.schem"));
+            Ok(bnr.Banners.Count == 4, $"Banner-Muster aus Schematic: {bnr.Banners.Count}");
+            var bp = SchematicReader.ToProject(bnr, bnr.X0, bnr.Y0, bnr.Z0, bnr.X1, bnr.Y1, bnr.Z1, false, false, 1);
+            var bp2 = Project.FromJson(bp.ToJson());
+            Ok(bp.Banners.Count == 4 && bp2.Banners.Count == 4 && bp2.Banners.All(kv => Blocks.Get(Blocks.BaseOf(bp2.Cells[kv.Key])).Key.EndsWith("banner")), "Banner-Muster nach Drehung und Speichern am richtigen Block");
+
             var jar = McAssets.FindJar() ?? McAssets.DownloadAsync(new Progress<string>(s => { })).GetAwaiter().GetResult();
             var mc = McAssets.Load(jar); mc.LoadGermanAsync().GetAwaiter().GetResult();
             int withTex = ent.CountBlocks().Keys.Count(v => mc.FacesOf(v) != null || mc.CrossOf(v) != null);

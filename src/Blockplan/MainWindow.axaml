@@ -169,6 +169,13 @@
                 <NumericUpDown Grid.Column="2" x:Name="OrY" FormatString="0" ShowButtonSpinner="False" PlaceholderText="Y"/>
                 <NumericUpDown Grid.Column="4" x:Name="OrZ" FormatString="0" ShowButtonSpinner="False" PlaceholderText="Z"/>
               </Grid>
+              <Border x:Name="SnowRow" IsVisible="False" Background="{DynamicResource SunkBrush}" CornerRadius="8" Padding="10,8" Margin="0,4,0,0">
+                <StackPanel Spacing="6">
+                  <TextBlock x:Name="SnowInfo" Classes="note"/>
+                  <CheckBox x:Name="SnowBlocksChk" Content="auch Schneeblöcke"/>
+                  <Button x:Name="BtnSnow" Content="Schnee entfernen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                </StackPanel>
+              </Border>
               <Button x:Name="BtnDelete" Content="Projekt löschen" Foreground="{DynamicResource DangerBrush}" Margin="0,6,0,0"/>
             </StackPanel>
           </Border>

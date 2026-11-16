@@ -21,6 +21,12 @@ class Program
             Console.WriteLine($"aktuell {Core.Updater.CurrentText} → " + (r == null ? "kein Update" : $"Update {r.Version}, {r.Size} Bytes, {r.Url}"));
             return 0;
         }
+        if (args.Length >= 2 && args[0] == "--import-schem")
+        {   // Schematic ohne Dialog vollständig übernehmen (zum Testen)
+            using var st = new Core.Store();
+            foreach (var f in args[1..]) { var sc = Core.SchematicReader.Load(f); var p = Core.SchematicReader.ToProject(sc, sc.X0, sc.Y0, sc.Z0, sc.X1, sc.Y1, sc.Z1, false, false, 0); st.Save(p); Console.WriteLine($"importiert: {p.Name}, {sc.Banners.Count} Banner mit Mustern: {string.Join(" ; ", sc.Banners.Values)}"); }
+            return 0;
+        }
         if (args.Length >= 2 && args[0] == "--import")
         {   // Projekte aus dem Artefakt ohne Fenster in die Datenbank übernehmen
             using var st = new Core.Store();

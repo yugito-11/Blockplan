@@ -18,6 +18,8 @@ public sealed class Project
     public long Created = Now(), Updated = Now();
     /// <summary>Weitere Daten aus dem Artefakt (Baupläne, Etappen, To-dos …), unverändert aufbewahrt.</summary>
     public JsonObject Extra = new();
+    /// <summary>Banner-Muster je Feld (Index wie Cells), z. B. "stripe_top:red|creeper:black".</summary>
+    public Dictionary<long, string> Banners = new();
 
     public long Index(int x, int y, int z) => ((long)y * D + z) * W + x;
     public ushort At(int x, int y, int z) => (x < 0 || y < 0 || z < 0 || x >= W || y >= H || z >= D) ? (ushort)0 : Cells[Index(x, y, z)];
@@ -33,6 +35,21 @@ public sealed class Project
         return -1;
     }
 
+    /// <summary>Jeden Blockzustand umwandeln (0 = entfernen). Gibt die Zahl der geänderten Felder zurück.</summary>
+    public long Replace(Func<int, int> f)
+    {
+        var map = new int[Blocks.Count + 1]; for (int i = 0; i < map.Length; i++) map[i] = -1;
+        long changed = 0;
+        for (long i = 0; i < Cells.LongLength; i++)
+        {
+            int v = Cells[i]; if (v == 0) continue;
+            if (v >= map.Length) { int old = map.Length; Array.Resize(ref map, Blocks.Count + 1); for (int k = old; k < map.Length; k++) map[k] = -1; }
+            if (map[v] < 0) map[v] = f(v);
+            if (map[v] != v) { Cells[i] = (ushort)map[v]; changed++; if (map[v] == 0) Banners.Remove(i); }
+        }
+        return changed;
+    }
+
     /// <summary>Anzahl je Blockzustand.</summary>
     public Dictionary<int, long> CountBlocks(int maxY = int.MaxValue)
     {
@@ -44,7 +61,7 @@ public sealed class Project
     }
 
     /* ---------- Austauschformat wie im Artefakt (JSON mit RLE in Basis 36) ---------- */
-    static readonly string[] known = { "v", "app", "id", "name", "w", "d", "h", "pal", "cells", "origin", "created", "updated" };
+    static readonly string[] known = { "v", "app", "id", "name", "w", "d", "h", "pal", "cells", "origin", "created", "updated", "banners" };
 
     public string ToJson()
     {
@@ -59,6 +76,7 @@ public sealed class Project
             ["origin"] = new JsonObject { ["x"] = OriginX, ["y"] = OriginY, ["z"] = OriginZ },
             ["created"] = Created, ["updated"] = Updated,
         };
+        if (Banners.Count > 0) { var b = new JsonObject(); foreach (var kv in Banners) b[kv.Key.ToString()] = kv.Value; o["banners"] = b; }
         foreach (var kv in Extra) if (!known.Contains(kv.Key)) o[kv.Key] = kv.Value?.DeepClone();
         return o.ToJsonString();
     }
@@ -74,6 +92,7 @@ public sealed class Project
         var pal = o["pal"]?.AsArray().Select(n => Blocks.Ensure((string?)n ?? "stone")).ToArray() ?? Array.Empty<int>();
         p.Cells = UnRle((string?)o["cells"] ?? "", (long)p.W * p.D * p.H, v => v == 0 || v > pal.Length ? (ushort)0 : (ushort)pal[v - 1]);
         if (o["origin"] is JsonObject og) { p.OriginX = (int?)og["x"] ?? 0; p.OriginY = (int?)og["y"] ?? 64; p.OriginZ = (int?)og["z"] ?? 0; }
+        if (o["banners"] is JsonObject bo) foreach (var kv in bo) if (long.TryParse(kv.Key, out var bi) && (string?)kv.Value is { } bv) p.Banners[bi] = bv;
         p.Created = (long?)o["created"] ?? Now(); p.Updated = (long?)o["updated"] ?? Now();
         foreach (var kv in o) if (!known.Contains(kv.Key)) p.Extra[kv.Key] = kv.Value?.DeepClone();
         return p;

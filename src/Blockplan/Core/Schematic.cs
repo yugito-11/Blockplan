@@ -15,6 +15,9 @@ public sealed class Schem
     public long Count; public int Types;
     public int X0, Y0, Z0, X1, Y1, Z1;          // belegter Bereich
     public long Water, WaterPlants, Waterlogged;
+    public long Snow, SnowBlocks, Snowy;       // Schneedecken/Pulverschnee, Schneeblöcke, verschneites Gras usw.
+    /// <summary>Banner-Muster je Feld (Index wie Cells), z. B. "stripe_top:red|creeper:black".</summary>
+    public Dictionary<long, string> Banners = new();
 }
 
 public static class SchematicReader
@@ -70,7 +73,13 @@ public static class SchematicReader
             do { b = data[p++]; v |= (b & 127) << sh; sh += 7; } while ((b & 128) != 0 && p < data.Length);
             cells[ci++] = v < map.Length ? map[v] : (ushort)0;
         }
-        return new Schem { W = w, H = h, D = d, Cells = cells };
+        var sc = new Schem { W = w, H = h, D = d, Cells = cells };
+        // Block-Entities: v2 „BlockEntities“ (Felder direkt), v3 „Blocks.BlockEntities“ (Felder unter „Data“), v1 „TileEntities“
+        var bes = (blocks?.G("BlockEntities") ?? s.G("BlockEntities") ?? s.G("TileEntities")) as List<object>;
+        if (bes != null)
+            foreach (var o in bes.OfType<Dictionary<string, object>>())
+                if (o.G("Pos") is int[] pos && pos.Length == 3) AddBanner(sc, pos[0], pos[1], pos[2], o.C("Data") ?? o);
+        return sc;
     }
 
     static Schem Litematic(Dictionary<string, object> s)
@@ -108,7 +117,12 @@ public static class SchematicReader
                 cells[((long)(lo[1] - mn[1] + y) * d + (lo[2] - mn[2] + z)) * w + (lo[0] - mn[0] + x)] = gv;
             }
         }
-        return new Schem { W = w, H = h, D = d, Cells = cells };
+        var sc = new Schem { W = w, H = h, D = d, Cells = cells };
+        foreach (var (r, lo, _) in R)
+            if (r.G("TileEntities") is List<object> tes)
+                foreach (var o in tes.OfType<Dictionary<string, object>>())
+                    AddBanner(sc, lo[0] - mn[0] + Nbt.Int(o.G("x")), lo[1] - mn[1] + Nbt.Int(o.G("y")), lo[2] - mn[2] + Nbt.Int(o.G("z")), o);
+        return sc;
     }
 
     static Schem Structure(Dictionary<string, object> s)
@@ -123,7 +137,44 @@ public static class SchematicReader
             var p = ((List<object>)b["pos"]).Select(Nbt.Int).ToArray(); int st = Nbt.Int(b.G("state"));
             if (st < map.Length) cells[((long)p[1] * d + p[2]) * w + p[0]] = map[st];
         }
-        return new Schem { W = w, H = h, D = d, Cells = cells };
+        var sc = new Schem { W = w, H = h, D = d, Cells = cells };
+        foreach (Dictionary<string, object> b in (List<object>)s.G("blocks")!)
+            if (b.C("nbt") is { } nbt) { var p = ((List<object>)b["pos"]).Select(Nbt.Int).ToArray(); AddBanner(sc, p[0], p[1], p[2], nbt); }
+        return sc;
+    }
+
+    /* ---------- Banner-Muster ---------- */
+    static readonly string[] DyeOrder = { "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black" };
+    static readonly Dictionary<string, string> LegacyPattern = new()
+    {
+        ["bs"] = "stripe_bottom", ["ts"] = "stripe_top", ["ls"] = "stripe_left", ["rs"] = "stripe_right", ["cs"] = "stripe_center", ["ms"] = "stripe_middle",
+        ["drs"] = "stripe_downright", ["dls"] = "stripe_downleft", ["ss"] = "small_stripes", ["cr"] = "cross", ["sc"] = "straight_cross", ["ld"] = "diagonal_left",
+        ["rud"] = "diagonal_right", ["lud"] = "diagonal_up_left", ["rd"] = "diagonal_up_right", ["vh"] = "half_vertical", ["vhr"] = "half_vertical_right",
+        ["hh"] = "half_horizontal", ["hhb"] = "half_horizontal_bottom", ["bl"] = "square_bottom_left", ["br"] = "square_bottom_right", ["tl"] = "square_top_left",
+        ["tr"] = "square_top_right", ["bt"] = "triangle_bottom", ["tt"] = "triangle_top", ["bts"] = "triangles_bottom", ["tts"] = "triangles_top", ["mc"] = "circle",
+        ["mr"] = "rhombus", ["bo"] = "border", ["cbo"] = "curly_border", ["bri"] = "bricks", ["gra"] = "gradient", ["gru"] = "gradient_up", ["cre"] = "creeper",
+        ["sku"] = "skull", ["flo"] = "flower", ["moj"] = "mojang", ["glb"] = "globe", ["pig"] = "piglin", ["flw"] = "flow", ["gus"] = "guster",
+    };
+
+    /// <summary>Muster aus den Zusatzdaten eines Banners (neues Format „patterns“, altes „Patterns“).</summary>
+    static void AddBanner(Schem sc, int x, int y, int z, Dictionary<string, object> d)
+    {
+        if (x < 0 || y < 0 || z < 0 || x >= sc.W || y >= sc.H || z >= sc.D) return;
+        var parts = new List<string>();
+        if ((d.G("patterns") ?? d.C("components")?.G("minecraft:banner_patterns")) is List<object> np)
+            foreach (var e in np.OfType<Dictionary<string, object>>())
+            {
+                var pat = e.G("pattern") switch { string ps => ps, Dictionary<string, object> pc => pc.G("asset_id") as string ?? "", _ => "" };
+                var col = e.G("color") as string ?? "white";
+                pat = pat.Replace("minecraft:", ""); if (pat.Length > 0) parts.Add(pat + ":" + col);
+            }
+        else if (d.G("Patterns") is List<object> op)
+            foreach (var e in op.OfType<Dictionary<string, object>>())
+            {
+                var code = e.G("Pattern") as string ?? ""; int c = Nbt.Int(e.G("Color"));
+                if (LegacyPattern.TryGetValue(code, out var pat)) parts.Add(pat + ":" + DyeOrder[Math.Clamp(c, 0, 15)]);
+            }
+        if (parts.Count > 0) sc.Banners[((long)y * sc.D + z) * sc.W + x] = string.Join("|", parts);
     }
 
     static void Analyze(Schem r)
@@ -131,13 +182,15 @@ public static class SchematicReader
         long WD = (long)r.W * r.D; var seen = new HashSet<int>();
         int x0 = int.MaxValue, y0 = int.MaxValue, z0 = int.MaxValue, x1 = -1, y1 = -1, z1 = -1; long cnt = 0;
         var colUsed = new bool[WD];
-        var wk = new Dictionary<ushort, int>();
+        var wk = new Dictionary<ushort, int>(); var sk = new Dictionary<ushort, int>();
         for (long i = 0; i < r.Cells.LongLength; i++)
         {
             var v = r.Cells[i]; if (v == 0) continue;
             cnt++; long c = i % WD; int y = (int)(i / WD); colUsed[c] = true; if (y < y0) y0 = y; if (y > y1) y1 = y;
             if (!wk.TryGetValue(v, out var k)) { k = WaterKind(v); wk[v] = k; seen.Add(Blocks.BaseOf(v)); }
             if (k == 1) r.Water++; else if (k == 2) r.WaterPlants++; else if (k == 3) r.Waterlogged++;
+            if (!sk.TryGetValue(v, out var sn)) { sn = SnowKind(v); sk[v] = sn; }
+            if (sn == 1) r.Snow++; else if (sn == 2) r.SnowBlocks++; else if (sn == 3) r.Snowy++;
         }
         for (long c = 0; c < WD; c++) if (colUsed[c]) { int x = (int)(c % r.W), z = (int)(c / r.W); x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); z0 = Math.Min(z0, z); z1 = Math.Max(z1, z); }
         r.Count = cnt; r.Types = seen.Count; r.X0 = x0; r.Y0 = y0; r.Z0 = z0; r.X1 = x1; r.Y1 = y1; r.Z1 = z1;
@@ -180,12 +233,30 @@ public static class SchematicReader
     }
 
     /// <summary>Ausschnitt als Projekt übernehmen, optional ohne Wasser und gedreht (q × 90° im Uhrzeigersinn).</summary>
-    public static Project ToProject(Schem s, int x0, int y0, int z0, int x1, int y1, int z1, bool dewater, bool dewaterPlants, int q)
+    /// <summary>1 Schneedecke/Pulverschnee, 2 Schneeblock, 3 verschneiter Block (snowy=true), 0 sonst</summary>
+    public static int SnowKind(int v)
+    {
+        if (v == 0) return 0; var b = Blocks.Get(Blocks.BaseOf(v));
+        if (b.Key == "snow" || b.Key == "powder_snow") return 1;
+        if (b.Key == "snow_block") return 2;
+        var me = Blocks.Get(v); return me.Props != null && me.Props.TryGetValue("snowy", out var sv) && sv == "true" ? 3 : 0;
+    }
+
+    /// <summary>Schnee weg: Decken und Pulverschnee entfernen (Schneeblöcke auf Wunsch), verschneite Blöcke auftauen.</summary>
+    public static int Desnow(int v, bool blocks)
+    {
+        int k = SnowKind(v);
+        if (k == 1 || (k == 2 && blocks)) return 0;
+        if (k == 3) return Blocks.Ensure(Blocks.Get(v).Key.Replace("snowy=true", "snowy=false"));
+        return v;
+    }
+
+    public static Project ToProject(Schem s, int x0, int y0, int z0, int x1, int y1, int z1, bool dewater, bool dewaterPlants, int q, bool desnow = false, bool desnowBlocks = false)
     {
         int w = x1 - x0 + 1, h = y1 - y0 + 1, d = z1 - z0 + 1;
         int W2 = q % 2 == 1 ? d : w, D2 = q % 2 == 1 ? w : d;
         var cells = new ushort[(long)W2 * D2 * h];
-        var conv = new Dictionary<ushort, ushort>();
+        var conv = new Dictionary<ushort, ushort>(); var banners = new Dictionary<long, string>();
         ushort Conv(ushort v)
         {
             if (conv.TryGetValue(v, out var r)) return r;
@@ -196,6 +267,7 @@ public static class SchematicReader
                 if (k == 1 || (k == 2 && dewaterPlants)) o = 0;
                 else if (k == 3) o = Blocks.Ensure(Regex.Replace(Regex.Replace(Blocks.Get(o).Key, "waterlogged=true,?", ""), @",?\]$", "]").Replace("[]", ""));
             }
+            if (o != 0 && desnow) o = Desnow(o, desnowBlocks);
             if (o != 0 && q != 0) o = Blocks.Ensure(RotateKey(Blocks.Get(o).Key, q));
             return conv[v] = (ushort)o;
         }
@@ -207,9 +279,11 @@ public static class SchematicReader
                 var v = s.Cells[si + x]; if (v == 0) continue;
                 int nx = x, nz = z;
                 switch (q) { case 1: nx = d - 1 - z; nz = x; break; case 2: nx = w - 1 - x; nz = d - 1 - z; break; case 3: nx = z; nz = w - 1 - x; break; }
-                cells[((long)y * D2 + nz) * W2 + nx] = Conv(v);
+                long ni = ((long)y * D2 + nz) * W2 + nx;
+                cells[ni] = Conv(v);
+                if (s.Banners.TryGetValue(si + x, out var bp)) banners[ni] = bp;
             }
         }
-        return new Project { Name = s.Name, W = W2, D = D2, H = h, Cells = cells };
+        return new Project { Name = s.Name, W = W2, D = D2, H = h, Cells = cells, Banners = banners };
     }
 }

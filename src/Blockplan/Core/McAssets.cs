@@ -24,10 +24,44 @@ public sealed class McAssets
     public Dictionary<string, (int w, int h, byte[] px)> EntityTex { get; } = new();   // textures/entity/chest|banner
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> regions = new();
 
+    /// <summary>
+    /// Banner-Bild wie im Spiel: Grundfläche (banner/base) in der Bannerfarbe, darüber jede Musterebene
+    /// (banner/&lt;muster&gt;, weiß mit Deckkraft) in ihrer Farbe. Ergebnis als Objekt-Textur „banner/composed:…“.
+    /// </summary>
+    public string ComposeBanner(uint baseTint, string patterns, Func<string, uint> dye)
+    {
+        var name = $"banner/composed:{baseTint:x6}|{patterns}";
+        lock (EntityTex)
+        {
+            if (EntityTex.ContainsKey(name) || !EntityTex.TryGetValue("banner/base", out var bt)) return EntityTex.ContainsKey(name) ? name : "banner/base";
+            var px = new byte[bt.px.Length]; int n = bt.w * bt.h;
+            for (int i = 0; i < n; i++)
+            {
+                px[i * 4] = (byte)(bt.px[i * 4] * ((baseTint >> 16) & 255) / 255); px[i * 4 + 1] = (byte)(bt.px[i * 4 + 1] * ((baseTint >> 8) & 255) / 255);
+                px[i * 4 + 2] = (byte)(bt.px[i * 4 + 2] * (baseTint & 255) / 255); px[i * 4 + 3] = bt.px[i * 4 + 3];
+            }
+            foreach (var part in patterns.Split('|', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var pc = part.Split(':'); if (pc.Length != 2 || !EntityTex.TryGetValue("banner/" + pc[0], out var pt) || pt.w != bt.w) continue;
+                uint c = dye(pc[1]);
+                for (int i = 0; i < n; i++)
+                {
+                    float a = pt.px[i * 4 + 3] / 255f; if (a <= 0) continue;
+                    px[i * 4] = (byte)(px[i * 4] * (1 - a) + pt.px[i * 4] * ((c >> 16) & 255) / 255f * a);
+                    px[i * 4 + 1] = (byte)(px[i * 4 + 1] * (1 - a) + pt.px[i * 4 + 1] * ((c >> 8) & 255) / 255f * a);
+                    px[i * 4 + 2] = (byte)(px[i * 4 + 2] * (1 - a) + pt.px[i * 4 + 2] * (c & 255) / 255f * a);
+                }
+            }
+            EntityTex[name] = (bt.w, bt.h, px);
+            return name;
+        }
+    }
+
     /// <summary>Ausschnitt einer Objekt-Textur als 16×16-Kachel, optional eingefärbt (0xRRGGBB).</summary>
     public byte[]? Region(string tex, int x, int y, int w, int h, uint tint = 0xffffff)
     {
-        if (!EntityTex.TryGetValue(tex, out var t) || w <= 0 || h <= 0) return null;
+        (int w, int h, byte[] px) t;
+        lock (EntityTex) { if (!EntityTex.TryGetValue(tex, out t) || w <= 0 || h <= 0) return null; }
         return regions.GetOrAdd($"{tex}|{x}|{y}|{w}|{h}|{tint}", _ =>
         {
             int sc = t.w / 64; var px = new byte[T * T * 4];   // Texturen können größer als 64 px sein (Ressourcenpakete)

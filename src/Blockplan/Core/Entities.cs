@@ -72,7 +72,23 @@ public static class Entities
     /// <summary>Drehung aus „facing“: Süd 0°, West 90°, Nord 180°, Ost 270° (im Uhrzeigersinn von oben).</summary>
     static float FacingDeg(string? f) => f switch { "west" => 90, "north" => 180, "east" => 270, _ => 0 };
 
-    public static List<MQuad> Build(int v, McAssets mc, Atlas at)
+    public static bool IsBanner(int v) => Blocks.Get(Blocks.BaseOf(v)).Key.EndsWith("_banner");
+
+    /// <summary>Fahne in 3 Abschnitten (oben, Mitte, unten), damit Muster scharf bleiben.</summary>
+    static void Flag(List<MQuad> o, McAssets mc, Atlas at, string tex, float x1, float y1, float z1, float x2, float y2, float z2, float deg)
+    {
+        int[] rows = { 1, 14, 27, 41 };            // Fahne liegt in der Textur bei v 1..41 (40 Pixel hoch)
+        int T(int x, int y, int w, int h) { var px = mc.Region(tex, x, y, w, h); return px == null ? -1 : at.TileOf(px); }
+        for (int k = 0; k < 3; k++)
+        {
+            float top = y2 - (y2 - y1) * (rows[k] - 1) / 40f, bot = y2 - (y2 - y1) * (rows[k + 1] - 1) / 40f;
+            int h = rows[k + 1] - rows[k];
+            var t = new[] { T(21, rows[k], 1, h), T(0, rows[k], 1, h), k == 0 ? T(1, 0, 20, 1) : -1, k == 2 ? T(21, 0, 20, 1) : -1, T(1, rows[k], 20, h), T(22, rows[k], 20, h) };
+            Box(o, x1, bot, z1, x2, top, z2, t, deg);
+        }
+    }
+
+    public static List<MQuad> Build(int v, McAssets mc, Atlas at, string? patterns = null)
     {
         var o = new List<MQuad>();
         var b = Blocks.Get(v); var key = Blocks.Get(Blocks.BaseOf(v)).Key; var pr = b.Props ?? new Dictionary<string, string>();
@@ -101,7 +117,7 @@ public static class Entities
             string color = key.Replace("_wall_banner", "").Replace("_banner", "");
             uint tint = Dye.TryGetValue(color, out var c) ? c : 0xffffff;
             const float s = 2f / 3f;                                         // Banner werden im Spiel auf 2/3 verkleinert
-            var flag = Unwrap(mc, at, "banner/base", 0, 0, 20, 40, 1, tint);
+            string ftex = mc.ComposeBanner(tint, patterns ?? "", n => Dye.TryGetValue(n, out var dc) ? dc : 0xffffff);
             var wood = "banner/banner_base";
             var pole = Unwrap(mc, at, wood, 44, 0, 2, 42, 2); var bar = Unwrap(mc, at, wood, 0, 42, 20, 2, 2);
             if (!wall)
@@ -109,14 +125,14 @@ public static class Entities
                 float deg = int.TryParse(P("rotation", "0"), out var r) ? r * 22.5f : 0;
                 Box(o, 8 - 1 * s, 0, 8 - 1 * s, 8 + 1 * s, 42 * s, 8 + 1 * s, pole, deg);                    // Stange
                 Box(o, 8 - 10 * s, 40 * s, 8 - 1 * s, 8 + 10 * s, 42 * s, 8 + 1 * s, bar, deg);             // Querstange
-                Box(o, 8 - 10 * s, 0, 8 + 1 * s, 8 + 10 * s, 40 * s, 8 + 2 * s, flag, deg);                 // Fahne vor der Stange
+                Flag(o, mc, at, ftex, 8 - 10 * s, 0, 8 + 1 * s, 8 + 10 * s, 40 * s, 8 + 2 * s, deg);         // Fahne vor der Stange
             }
             else
             {   // an der Wand: hängt von der Oberkante des Blocks nach unten über den Block hinaus
                 float deg = FacingDeg(P("facing", "south"));
                 float top = 16;
                 Box(o, 8 - 10 * s, top - 2 * s, 0, 8 + 10 * s, top, 2 * s, bar, deg);
-                Box(o, 8 - 10 * s, top - 42 * s, 2 * s - 1 * s, 8 + 10 * s, top - 2 * s, 2 * s, flag, deg);
+                Flag(o, mc, at, ftex, 8 - 10 * s, top - 42 * s, 2 * s - 1 * s, 8 + 10 * s, top - 2 * s, 2 * s, deg);
             }
             return o;
         }

@@ -143,6 +143,7 @@ public static class Mesher
                             if (fv == ModelBank.FamWall && conn != 5 && conn != 10) conn |= 16;
                         }
                         var qs = bank!.Get(v, conn);
+                        if (p.Banners.Count > 0 && Entities.IsBanner(v) && p.Banners.TryGetValue(i, out var pat)) qs = bank.GetBanner(v, pat);
                         if (qs.Length == 0) qs = bank.Get(v, 0);
                         bool[] nOp = { nPX, nNX, nPY, nNY, nPZ, nNZ };
                         float wx = gx + ox, wz = gz + oz;

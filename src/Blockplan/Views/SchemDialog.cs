@@ -11,7 +11,7 @@ namespace Blockplan.Views;
 /// <summary>„Schematic laden“: Ausschnitt, Wasser entfernen, Drehen.</summary>
 public sealed class SchemDialog : Window
 {
-    public sealed record Result(int X0, int Y0, int Z0, int X1, int Y1, int Z1, bool Dewater, bool Plants, int Rot);
+    public sealed record Result(int X0, int Y0, int Z0, int X1, int Y1, int Z1, bool Dewater, bool Plants, int Rot, bool Desnow, bool SnowBlocks);
 
     public SchemDialog(Schem s)
     {
@@ -56,6 +56,9 @@ public sealed class SchemDialog : Window
         var dw = new CheckBox { Content = $"Wasser entfernen ({s.Water:N0} Wasserblöcke, {s.Waterlogged:N0} geflutete)", IsChecked = s.Water > 0, IsEnabled = s.Water + s.Waterlogged > 0 };
         var pl = new CheckBox { Content = $"auch Seegras und Kelp ({s.WaterPlants:N0})", IsVisible = s.WaterPlants > 0, Margin = new Thickness(26, 0, 0, 0) };
         root.Children.Add(dw); root.Children.Add(pl);
+        var sn = new CheckBox { Content = $"Schnee entfernen ({s.Snow:N0} Schneedecken, {s.Snowy:N0} verschneite Blöcke)", IsChecked = false, IsEnabled = s.Snow + s.Snowy + s.SnowBlocks > 0 };
+        var sb = new CheckBox { Content = $"auch Schneeblöcke ({s.SnowBlocks:N0})", IsVisible = s.SnowBlocks > 0, Margin = new Thickness(26, 0, 0, 0) };
+        root.Children.Add(sn); root.Children.Add(sb);
         var rot = new ComboBox { ItemsSource = new[] { "Nicht drehen", "90° im Uhrzeigersinn", "180°", "90° gegen den Uhrzeigersinn" }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         root.Children.Add(new DockPanel { Children = { new TextBlock { Text = "Drehen", VerticalAlignment = VerticalAlignment.Center, Width = 70 }, rot } });
 
@@ -67,7 +70,7 @@ public sealed class SchemDialog : Window
         {
             int I(int k) => (int)(f[k].Value ?? 0);
             int x0 = Math.Min(I(0), I(3)), x1 = Math.Max(I(0), I(3)), z0 = Math.Min(I(1), I(4)), z1 = Math.Max(I(1), I(4)), y0 = Math.Min(I(2), I(5)), y1 = Math.Max(I(2), I(5));
-            Close(new Result(x0, y0, z0, x1, y1, z1, dw.IsChecked == true, pl.IsChecked == true, rot.SelectedIndex));
+            Close(new Result(x0, y0, z0, x1, y1, z1, dw.IsChecked == true, pl.IsChecked == true, rot.SelectedIndex, sn.IsChecked == true, sb.IsChecked == true));
         };
         Content = root;
     }

@@ -158,6 +158,10 @@ public sealed class ModelBank
         return n.Z >= 0 ? 4 : 5;
     }
 
+    readonly ConcurrentDictionary<string, MQuad[]> bannerCache = new();
+    /// <summary>Banner mit Mustern (je Muster-Kombination einmal gebaut).</summary>
+    public MQuad[] GetBanner(int v, string patterns) => bannerCache.GetOrAdd(v + "#" + patterns, _ => Entities.Build(v, mc, atlas, patterns).ToArray());
+
     /// <summary>Flächen für Blockzustand v mit Verbindungen conn (leer, wenn es kein Modell gibt).</summary>
     public MQuad[] Get(int v, int conn) => cache.GetOrAdd(((long)v << 8) | (uint)conn, _ => Build(v, conn));
 
