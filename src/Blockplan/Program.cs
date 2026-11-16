@@ -14,6 +14,7 @@ class Program
         var de = new System.Globalization.CultureInfo("de-DE");
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture = de; System.Globalization.CultureInfo.CurrentCulture = de;
         if (args.Length >= 2 && args[0] == "--selftest") return Core.SelfTest.Run(args[1]);
+        if (args.Length >= 1 && args[0] == "--modeltest") return Core.ModelTest.Run();
         if (args.Length >= 1 && args[0] == "--checkupdate")
         {
             var r = Core.Updater.CheckAsync().GetAwaiter().GetResult();

@@ -18,6 +18,13 @@ public sealed class Atlas
 
     int Tile(byte[] px) { if (!index.TryGetValue(px, out var t)) { t = Tiles.Count; Tiles.Add(px); index[px] = t; } return t; }
 
+    /// <summary>Kachel für eine Textur aus der Spieldatei (z. B. "oak_planks") oder -1.</summary>
+    public int TileByName(string name)
+    {
+        if (Mc == null || !Mc.Tex.TryGetValue(name, out var px)) return -1;
+        lock (faces) return Tile(px);
+    }
+
     /// <summary>Kachel je Seite (+x,-x,+y,-y,+z,-z).</summary>
     public int[] Faces(int v)
     {

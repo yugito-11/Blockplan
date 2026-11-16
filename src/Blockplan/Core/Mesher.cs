@@ -83,15 +83,26 @@ public static class Mesher
     public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default)
     {
         int n = Blocks.Count; var kind = new byte[n]; var boxes = new Box[n][]; var ft = new int[n][]; var cr = new int[n]; var bas = new int[n]; var trans = new bool[n];
+        var opq = new bool[n]; var fam = new byte[n];
+        var bank = atlas.Mc != null && atlas.Mc.BlockStates.Count > 0 ? new ModelBank(atlas) : null;
         foreach (var v in p.CountBlocks(top).Keys)
         {
             var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v);
+            opq[v] = k == 1;
             if (k == 3) cr[v] = atlas.Cross(v); else ft[v] = atlas.Faces(v);
             if (k == 2) trans[v] = Blocks.IsWater(v) || IsSemi(atlas.Tiles[ft[v][0]]);
+            if (bank != null && !Blocks.IsWater(v))
+            {
+                // Echte Modelle: einfache volle Würfel bleiben zusammengefasst, alles andere als Modell
+                fam[v] = (byte)ModelBank.Family(v);
+                var sc = k == 1 ? bank.SimpleCube(v) : null;
+                if (sc != null) ft[v] = sc;
+                else if (bank.Get(v, 0).Length > 0 || fam[v] != 0) kind[v] = 5;
+            }
         }
         int W0 = p.W, D0 = p.D, H = Math.Min(top, p.H - 1) + 1; long SY = (long)W0 * D0; var cells = p.Cells;
         float ox = -W0 / 2f, oz = -D0 / 2f;
-        bool Opaque(long i) => kind[cells[i]] == 1;
+        bool Opaque(long i) => opq[cells[i]];
         var regs = new List<(int x0, int z0)>();
         for (int z0 = 0; z0 < D0; z0 += R) for (int x0 = 0; x0 < W0; x0 += R) regs.Add((x0, z0));
         var outp = new MeshChunk?[regs.Count * 2];
@@ -122,6 +133,29 @@ public static class Mesher
                     bool nPX = gx + 1 < W0 && Opaque(i + 1), nNX = gx > 0 && Opaque(i - 1);
                     bool nPY = y + 1 < H && Opaque(i + SY), nNY = y > 0 && Opaque(i - SY);
                     bool nPZ = gz + 1 < D0 && Opaque(i + W0), nNZ = gz > 0 && Opaque(i - W0);
+                    if (k == 5)
+                    {   // echtes Blockmodell
+                        int conn = 0, fv = fam[v];
+                        if (fv != 0)
+                        {
+                            void Nb(long j, bool inb, int bit) { if (!inb) return; int nv = cells[j]; if (ModelBank.Connects(fv, nv, fam[nv], opq[nv])) conn |= bit; }
+                            Nb(i - W0, gz > 0, 1); Nb(i + 1, gx + 1 < W0, 2); Nb(i + W0, gz + 1 < D0, 4); Nb(i - 1, gx > 0, 8);
+                            if (fv == ModelBank.FamWall && conn != 5 && conn != 10) conn |= 16;
+                        }
+                        var qs = bank!.Get(v, conn);
+                        if (qs.Length == 0) qs = bank.Get(v, 0);
+                        bool[] nOp = { nPX, nNX, nPY, nNY, nPZ, nNZ };
+                        float wx = gx + ox, wz = gz + oz;
+                        foreach (var q in qs)
+                        {
+                            if (q.Cull >= 0 && nOp[q.Cull]) continue;
+                            curT = q.Semi;
+                            var P = q.P;
+                            Quad(new[] { wx + P[0], y + P[1], wz + P[2], wx + P[3], y + P[4], wz + P[5], wx + P[6], y + P[7], wz + P[8], wx + P[9], y + P[10], wz + P[11] },
+                                 q.UV, q.Tile * 8 + q.Dir, false);
+                        }
+                        any = true; continue;
+                    }
                     if (k == 1)
                     {
                         int bits = (nPX ? 0 : 1) | (nNX ? 0 : 2) | (nPY ? 0 : 4) | (nNY ? 0 : 8) | (nPZ ? 0 : 16) | (nNZ ? 0 : 32);

@@ -20,6 +20,8 @@ public sealed class McAssets
     public const int T = 16; // Kantenlänge einer Kachel
     public Dictionary<string, byte[]> Tex { get; } = new();          // Name → RGBA 16×16
     public Dictionary<string, Faces> Faces { get; } = new();          // Block-Key → Texturen
+    public Dictionary<string, JsonNode> BlockStates { get; private set; } = new();   // blockstates/*.json
+    public Dictionary<string, JsonNode> Models { get; private set; } = new();        // models/block/*.json
     public Dictionary<string, string> NamesDe { get; } = new();       // Block-Key → deutscher Name
     public string Version { get; private set; } = "";
 
@@ -189,6 +191,7 @@ public sealed class McAssets
             else if (n == "assets/minecraft/lang/de_de.json") { try { de = Parse(e); } catch { } }
         }
         a.ResolveFaces(bs, models);
+        a.BlockStates = bs; a.Models = models;
         if (de is JsonObject dob)
             foreach (var kv in dob) if (kv.Key.StartsWith("block.minecraft.") && kv.Key.Count(c => c == '.') == 2) a.NamesDe[kv.Key[16..]] = (string?)kv.Value ?? "";
         return a;

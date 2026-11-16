@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -60,6 +61,12 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         int my = Math.Max(1, project.MaxY());
         target = new Vector3(0, Math.Min(project.H, my + 1) * 0.4f, 0);
         dist = Math.Max(Math.Max(project.W, project.D), 8) * 1.3f; yaw = -0.75f; pitch = 0.62f;
+        // nur zum Testen: feste Kamera „yaw,pitch,dist,x,y,z“ (Grad, Blöcke; x/z ab Nordwest-Ecke)
+        if (Environment.GetEnvironmentVariable("BLOCKPLAN_VIEW") is { Length: > 0 } vw)
+        {
+            var a = vw.Split(',').Select(t => float.Parse(t, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+            yaw = a[0] * MathF.PI / 180; pitch = a[1] * MathF.PI / 180; dist = a[2]; target = new Vector3(a[3] - project.W / 2f, a[4], a[5] - project.D / 2f); return;
+        }
         if (float.TryParse(Environment.GetEnvironmentVariable("BLOCKPLAN_DIST"), System.Globalization.CultureInfo.InvariantCulture, out var dd)) { dist = dd; target.Z = project.D * 0.12f; }
     }
 
