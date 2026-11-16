@@ -12,6 +12,8 @@ public sealed class MeshChunk
 {
     public float[] V = Array.Empty<float>();
     public uint[] I = Array.Empty<uint>();
+    /// <summary>Halb durchsichtig (Wasser, Eis, farbiges Glas …): wird nach dem Rest mit Überblendung gezeichnet.</summary>
+    public bool Translucent;
 }
 
 /// <summary>
@@ -29,6 +31,15 @@ public static class Mesher
 
     sealed record Box(float X0, float Y0, float Z0, float X1, float Y1, float Z1);
     static readonly Box Full = new(0, 0, 0, 1, 1, 1);
+    static readonly Box[] WaterTop = { new(0, 0, 0, 1, .875f, 1) };
+
+    /// <summary>Kachel überwiegend halb durchsichtig (nicht nur Löcher wie bei Glas oder Laub)?</summary>
+    static bool IsSemi(byte[] px)
+    {
+        int semi = 0, n = px.Length / 4;
+        for (int i = 0; i < n; i++) { byte a = px[i * 4 + 3]; if (a > 20 && a < 235) semi++; }
+        return semi > n / 2;
+    }
     static readonly Regex plants = new("torch|sapling|flower|tulip|grass|fern|bush|mushroom|roots|sprouts|_fan|coral$|kelp|seagrass|cane|bamboo$|vine");
 
     /// <summary>0 Luft, 1 voll undurchsichtig, 2 Quader, 3 gekreuzt</summary>
@@ -71,26 +82,29 @@ public static class Mesher
 
     public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default)
     {
-        int n = Blocks.Count; var kind = new byte[n]; var boxes = new Box[n][]; var ft = new int[n][]; var cr = new int[n]; var bas = new int[n];
+        int n = Blocks.Count; var kind = new byte[n]; var boxes = new Box[n][]; var ft = new int[n][]; var cr = new int[n]; var bas = new int[n]; var trans = new bool[n];
         foreach (var v in p.CountBlocks(top).Keys)
         {
             var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v);
             if (k == 3) cr[v] = atlas.Cross(v); else ft[v] = atlas.Faces(v);
+            if (k == 2) trans[v] = Blocks.IsWater(v) || IsSemi(atlas.Tiles[ft[v][0]]);
         }
         int W0 = p.W, D0 = p.D, H = Math.Min(top, p.H - 1) + 1; long SY = (long)W0 * D0; var cells = p.Cells;
         float ox = -W0 / 2f, oz = -D0 / 2f;
         bool Opaque(long i) => kind[cells[i]] == 1;
         var regs = new List<(int x0, int z0)>();
         for (int z0 = 0; z0 < D0; z0 += R) for (int x0 = 0; x0 < W0; x0 += R) regs.Add((x0, z0));
-        var outp = new MeshChunk?[regs.Count];
+        var outp = new MeshChunk?[regs.Count * 2];
         Parallel.For(0, regs.Count, new ParallelOptions { CancellationToken = ct }, ri =>
         {
             var (x0, z0) = regs[ri];
             int W = Math.Min(R, W0 - x0), D = Math.Min(R, D0 - z0); int nn = W * D * H;
             var cv = new ushort[nn]; var ex = new byte[nn]; bool any = false;
-            var V = new List<float>(); var I = new List<uint>();
+            var Vo = new List<float>(); var Io = new List<uint>(); var Vt = new List<float>(); var It = new List<uint>();
+            bool curT = false;
             void Quad(float[] c, float[] uv, int td, bool flip)
             {
+                var V = curT ? Vt : Vo; var I = curT ? It : Io;
                 uint b0 = (uint)(V.Count / 6);
                 for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1]); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(td); }
                 if (flip) { I.Add(b0); I.Add(b0 + 2); I.Add(b0 + 1); I.Add(b0); I.Add(b0 + 3); I.Add(b0 + 2); }
@@ -115,6 +129,7 @@ public static class Mesher
                         continue;
                     }
                     float bx = gx + ox, bz = gz + oz;
+                    curT = false;
                     if (k == 3)
                     {
                         float s = .5f * .7071f * 1.13f, cx = bx + .5f, cz = bz + .5f; int td = cr[v] * 8 + 6;
@@ -122,10 +137,13 @@ public static class Mesher
                         Quad(new[] { cx - s, y, cz + s, cx + s, y, cz - s, cx + s, y + 1f, cz - s, cx - s, y + 1f, cz + s }, new float[] { 0, 0, 1, 0, 1, 1, 0, 1 }, td, false);
                         any = true; continue;
                     }
-                    var f = ft[v]; int bv = bas[v];
+                    var f = ft[v]; int bv = bas[v]; curT = trans[v];
                     bool Same(long j, bool inb) => inb && bas[cells[j]] == bv && kind[cells[j]] == 2 && boxes[cells[j]].Length == 1 && boxes[cells[j]][0] == Full;
                     bool isFull = boxes[v].Length == 1 && boxes[v][0] == Full;
-                    foreach (var q in boxes[v])
+                    var bxs = boxes[v];
+                    // Wasseroberfläche liegt wie im Spiel etwas tiefer, wenn darüber kein Wasser ist
+                    if (isFull && Blocks.IsWater(v) && !Same(i + SY, y + 1 < H)) bxs = WaterTop;
+                    foreach (var q in bxs)
                     {
                         float X0 = bx + q.X0, X1 = bx + q.X1, Y0 = y + q.Y0, Y1 = y + q.Y1, Z0 = bz + q.Z0, Z1 = bz + q.Z1;
                         // +x
@@ -145,6 +163,7 @@ public static class Mesher
                     any = true;
                 }
             }
+            curT = false;
             if (!any) return;
             // Zusammenfassen gleicher Flächen je Richtung und Schicht
             int[] dims = { W, H, D };
@@ -178,7 +197,8 @@ public static class Mesher
                         }
                 }
             }
-            if (I.Count > 0) outp[ri] = new MeshChunk { V = V.ToArray(), I = I.ToArray() };
+            if (Io.Count > 0) outp[ri * 2] = new MeshChunk { V = Vo.ToArray(), I = Io.ToArray() };
+            if (It.Count > 0) outp[ri * 2 + 1] = new MeshChunk { V = Vt.ToArray(), I = It.ToArray(), Translucent = true };
         });
         return outp.Where(m => m != null).Select(m => m!).ToList();
     }

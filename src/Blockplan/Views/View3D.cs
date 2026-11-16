@@ -17,8 +17,8 @@ namespace Blockplan.Views;
 /// <summary>3D-Ansicht mit OpenGL. Linke Maustaste dreht, rechte verschiebt, Mausrad zoomt.</summary>
 public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTest
 {
-    GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky;
-    readonly List<(uint vao, uint vbo, uint ebo, int count)> meshes = new();
+    GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg, uTrans; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky;
+    readonly List<(uint vao, uint vbo, uint ebo, int count, bool trans)> meshes = new();
     List<MeshChunk>? pending; (byte[] px, int cols)? pendingAtlas; bool clearMeshes;
     int atlasCols = 1;
     Project? project; Atlas? atlas; int top;
@@ -96,25 +96,25 @@ uniform mat4 mvp; uniform vec3 cam;
 out vec2 vUv; out float vTd; out float vDist;
 void main(){ vUv=tuv; vTd=td; vDist=distance(pos,cam); gl_Position=mvp*vec4(pos,1.0); }";
         string fs = head + @"
-uniform sampler2D atlas; uniform sampler2D avgTex; uniform float cols; uniform float fogNear; uniform float fogFar; uniform vec3 sky;
+uniform sampler2D atlas; uniform sampler2D avgTex; uniform float cols; uniform float trans; uniform float fogNear; uniform float fogFar; uniform vec3 sky;
 in vec2 vUv; in float vTd; in float vDist; out vec4 outColor;
 void main(){
   float t=floor((vTd+0.5)/8.0); float d=floor(vTd+0.5)-t*8.0;
   float sh = d<1.5?0.6:(d<2.5?1.0:(d<3.5?0.5:(d<5.5?0.8:0.9)));
   vec2 f=clamp(fract(vUv),0.002,0.998); vec2 o=vec2(mod(t,cols),floor(t/cols));
-  vec4 c=texture(atlas,(o+vec2(f.x,1.0-f.y))/cols); if(c.a<0.5) discard;
+  vec4 c=texture(atlas,(o+vec2(f.x,1.0-f.y))/cols); if(trans<0.5 ? c.a<0.5 : c.a<0.02) discard;
   // weit weg: Durchschnittsfarbe der Kachel statt Pixelrauschen
   float tpp=16.0*max(length(dFdx(vUv)),length(dFdy(vUv)));
   vec3 avg=texelFetch(avgTex,ivec2(int(o.x),int(o.y)),0).rgb;
   c.rgb=mix(c.rgb,avg,clamp((tpp-0.8)/2.5,0.0,1.0));
   float fog=clamp((vDist-fogNear)/(fogFar-fogNear),0.0,1.0);
-  outColor=vec4(mix(c.rgb*sh,sky,fog),1.0);
+  outColor=vec4(mix(c.rgb*sh,sky,fog), trans<0.5 ? 1.0 : max(c.a,0.45));
 }";
         try { prog = Link(vs, fs); } catch (Exception ex) { Console.Error.WriteLine("[3D] " + ex.Message); throw; }
         uMvp = gl.GetUniformLocation(prog, "mvp"); uCols = gl.GetUniformLocation(prog, "cols"); uCam = gl.GetUniformLocation(prog, "cam");
         uFogNear = gl.GetUniformLocation(prog, "fogNear"); uFogFar = gl.GetUniformLocation(prog, "fogFar"); uSky = gl.GetUniformLocation(prog, "sky");
         atlasTex = gl.GenTexture(); avgTex = gl.GenTexture();
-        uAtlas = gl.GetUniformLocation(prog, "atlas"); uAvg = gl.GetUniformLocation(prog, "avgTex");
+        uAtlas = gl.GetUniformLocation(prog, "atlas"); uTrans = gl.GetUniformLocation(prog, "trans"); uAvg = gl.GetUniformLocation(prog, "avgTex");
     }
 
     uint Link(string vs, string fs)
@@ -178,7 +178,7 @@ void main(){
             gl.EnableVertexAttribArray(0); gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 24, (void*)0);
             gl.EnableVertexAttribArray(1); gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 24, (void*)12);
             gl.EnableVertexAttribArray(2); gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 24, (void*)20);
-            meshes.Add((vao, vbo, ebo, c.I.Length));
+            meshes.Add((vao, vbo, ebo, c.I.Length, c.Translucent));
         }
         gl!.BindVertexArray(0);
     }
@@ -241,7 +241,13 @@ void main(){
         float fd = Fly ? size * 0.5f : dist; gl.Uniform1(uFogNear, fd * 1.2f + size * 0.6f); gl.Uniform1(uFogFar, fd * 3f + size * 1.5f + 200);
         gl.ActiveTexture(TextureUnit.Texture0); gl.BindTexture(TextureTarget.Texture2D, atlasTex); gl.Uniform1(uAtlas, 0);
         gl.ActiveTexture(TextureUnit.Texture1); gl.BindTexture(TextureTarget.Texture2D, avgTex); gl.Uniform1(uAvg, 1); gl.ActiveTexture(TextureUnit.Texture0);
-        foreach (var m in meshes) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
+        // erst alles Feste, dann Wasser, Eis und farbiges Glas halb durchsichtig darüber
+        gl.Uniform1(uTrans, 0f);
+        foreach (var m in meshes) if (!m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
+        gl.Enable(EnableCap.Blend); gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); gl.DepthMask(false);
+        gl.Uniform1(uTrans, 1f);
+        foreach (var m in meshes) if (m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
+        gl.DepthMask(true); gl.Disable(EnableCap.Blend);
         gl.BindVertexArray(0);
     }
 
