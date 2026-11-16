@@ -73,6 +73,9 @@
           <TextBlock Text="Tempo" Foreground="#C8D2CB" VerticalAlignment="Center" FontSize="12"/>
           <Slider x:Name="SpeedSlider" Minimum="1" Maximum="60" Value="8" Width="120" VerticalAlignment="Center"/>
           <TextBlock x:Name="SpeedVal" Foreground="White" VerticalAlignment="Center" FontSize="12" MinWidth="70"/>
+          <TextBlock Text="Maus" Foreground="#C8D2CB" VerticalAlignment="Center" FontSize="12" Margin="8,0,0,0"/>
+          <Slider x:Name="MouseSlider" Minimum="0.2" Maximum="2" Value="1" Width="110" VerticalAlignment="Center"/>
+          <TextBlock x:Name="MouseVal" Foreground="White" VerticalAlignment="Center" FontSize="12" MinWidth="40"/>
         </StackPanel>
       </Border>
       <Border x:Name="MatPage" IsVisible="False" Background="{DynamicResource BgBrush}" Padding="24">

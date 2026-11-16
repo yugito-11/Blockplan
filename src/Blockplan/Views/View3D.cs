@@ -187,7 +187,9 @@ void main(){
 
     /* ---------- Flugmodus: Kamera frei im Raum, wie in Minecraft im Zuschauermodus ---------- */
     public bool Fly { get; private set; }
-    public float Speed { get; set; } = 8;              // Blöcke pro Sekunde im Flugmodus
+    public float Speed { get; set; } = 8;
+    /// <summary>Maus-Empfindlichkeit (1 = normal) für Drehen, Verschieben und Zoomen.</summary>
+    public float MouseSens { get; set; } = 1;              // Blöcke pro Sekunde im Flugmodus
     public event Action<bool>? FlyChanged;
     Vector3 eye; float lookYaw, lookPitch;
     static Vector3 Dir(float y, float p) => new(MathF.Cos(y) * MathF.Cos(p), MathF.Sin(p), MathF.Sin(y) * MathF.Cos(p));
@@ -263,14 +265,14 @@ void main(){
             var d = pos - from; dragFrom = pos;
             if (Fly)
             {   // umsehen
-                lookYaw += (float)d.X * 0.003f; lookPitch = Math.Clamp(lookPitch - (float)d.Y * 0.003f, -1.55f, 1.55f);
+                float r = 0.0022f * MouseSens; lookYaw += (float)d.X * r; lookPitch = Math.Clamp(lookPitch - (float)d.Y * r, -1.55f, 1.55f);
             }
             else if (panning)
             {
                 var fwd = Forward(); var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY)); var up = Vector3.Cross(right, fwd);
-                float k = dist * 0.0018f; target += (-right * (float)d.X + up * (float)d.Y) * k;
+                float k = 2 * dist * MathF.Tan(35 * MathF.PI / 180) / (float)Math.Max(1, Bounds.Height) * MouseSens; target += (-right * (float)d.X + up * (float)d.Y) * k;
             }
-            else { yaw += (float)d.X * 0.005f; pitch = Math.Clamp(pitch + (float)d.Y * 0.005f, -1.5f, 1.5f); }
+            else { float r = 0.003f * MouseSens; yaw += (float)d.X * r; pitch = Math.Clamp(pitch + (float)d.Y * r, -1.5f, 1.5f); }
             RequestNextFrameRendering();
         }
         else Pick(pos);
@@ -279,8 +281,9 @@ void main(){
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        if (Fly) eye += Forward() * (float)e.Delta.Y * Math.Max(1, Speed * 0.15f);
-        else dist = Math.Clamp(dist * MathF.Exp(-(float)e.Delta.Y * 0.1f), 2, 6000);
+        float wd = Math.Clamp((float)e.Delta.Y, -3, 3); // Touchpads liefern teils große Sprünge
+        if (Fly) eye += Forward() * wd * Math.Max(1, Speed * 0.15f) * MouseSens;
+        else dist = Math.Clamp(dist * MathF.Exp(-wd * 0.06f * MouseSens), 2, 6000);
         RequestNextFrameRendering(); e.Handled = true;
     }
 

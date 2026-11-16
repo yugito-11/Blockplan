@@ -57,6 +57,8 @@ public partial class MainWindow : Window
         View3.FlyChanged += on => { FlyBtn.IsChecked = on; ShowTab(1); };
         SpeedSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { View3.Speed = (float)SpeedSlider.Value; SpeedVal.Text = $"{SpeedSlider.Value:0} Blöcke/s"; } };
         SpeedVal.Text = "8 Blöcke/s";
+        MouseSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { View3.MouseSens = (float)MouseSlider.Value; MouseVal.Text = $"{MouseSlider.Value * 100:0} %"; if (!loadingUi) store.Set("mouse", MouseSlider.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); } };
+        MouseVal.Text = "100 %";
         View3.Status += s => { StatusText.Text = s; StatusBox.IsVisible = s.Length > 0 && View3.IsVisible; };
         AddHandler(DragDrop.DropEvent, OnDrop); DragDrop.SetAllowDrop(this, true);
         KeyDown += (_, e) =>
@@ -95,6 +97,7 @@ public partial class MainWindow : Window
     async Task Startup()
     {
         RefreshList(); UpdateDbInfo();
+        if (double.TryParse(store.Get("mouse"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ms)) MouseSlider.Value = ms;
         _ = LoadTextures(null);
         var last = store.Get("last"); var list = store.List();
         var id = list.Any(p => p.Id == last) ? last : list.FirstOrDefault()?.Id;

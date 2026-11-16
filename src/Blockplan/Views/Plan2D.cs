@@ -177,7 +177,7 @@ public sealed class Plan2D : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e); var pos = e.GetPosition(this);
-        double ns = Math.Clamp(scale * Math.Exp(e.Delta.Y * 0.18), 0.05, 64);
+        double ns = Math.Clamp(scale * Math.Exp(Math.Clamp(e.Delta.Y, -3, 3) * 0.12), 0.05, 64);
         off = pos - (pos - off) * (ns / scale); scale = ns; InvalidateVisual(); e.Handled = true;
     }
 
