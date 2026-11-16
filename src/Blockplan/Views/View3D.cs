@@ -187,7 +187,7 @@ void main(){
 
     /* ---------- Flugmodus: Kamera frei im Raum, wie in Minecraft im Zuschauermodus ---------- */
     public bool Fly { get; private set; }
-    public float Speed { get; set; } = 20;              // Blöcke pro Sekunde im Flugmodus
+    public float Speed { get; set; } = 8;              // Blöcke pro Sekunde im Flugmodus
     public event Action<bool>? FlyChanged;
     Vector3 eye; float lookYaw, lookPitch;
     static Vector3 Dir(float y, float p) => new(MathF.Cos(y) * MathF.Cos(p), MathF.Sin(p), MathF.Sin(y) * MathF.Cos(p));
@@ -263,14 +263,14 @@ void main(){
             var d = pos - from; dragFrom = pos;
             if (Fly)
             {   // umsehen
-                lookYaw += (float)d.X * 0.005f; lookPitch = Math.Clamp(lookPitch - (float)d.Y * 0.005f, -1.55f, 1.55f);
+                lookYaw += (float)d.X * 0.003f; lookPitch = Math.Clamp(lookPitch - (float)d.Y * 0.003f, -1.55f, 1.55f);
             }
             else if (panning)
             {
                 var fwd = Forward(); var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY)); var up = Vector3.Cross(right, fwd);
                 float k = dist * 0.0018f; target += (-right * (float)d.X + up * (float)d.Y) * k;
             }
-            else { yaw += (float)d.X * 0.008f; pitch = Math.Clamp(pitch + (float)d.Y * 0.008f, -1.5f, 1.5f); }
+            else { yaw += (float)d.X * 0.005f; pitch = Math.Clamp(pitch + (float)d.Y * 0.005f, -1.5f, 1.5f); }
             RequestNextFrameRendering();
         }
         else Pick(pos);
@@ -279,8 +279,8 @@ void main(){
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        if (Fly) eye += Forward() * (float)e.Delta.Y * Math.Max(2, Speed * 0.25f);
-        else dist = Math.Clamp(dist * MathF.Exp(-(float)e.Delta.Y * 0.15f), 2, 6000);
+        if (Fly) eye += Forward() * (float)e.Delta.Y * Math.Max(1, Speed * 0.15f);
+        else dist = Math.Clamp(dist * MathF.Exp(-(float)e.Delta.Y * 0.1f), 2, 6000);
         RequestNextFrameRendering(); e.Handled = true;
     }
 
@@ -307,7 +307,7 @@ void main(){
     {
         var now = DateTime.Now; float dt = (float)Math.Clamp((now - lastTick).TotalSeconds, 0.001, 0.1); lastTick = now;
         if (held.Count == 0) { moveTimer?.Stop(); return; }
-        float sp = (Fly ? Speed : Math.Max(Speed, dist * 0.8f)) * dt;
+        float sp = (Fly ? Speed : Math.Max(Speed, dist * 0.12f)) * dt;
         var mods = lastMods;
         if (mods.HasFlag(KeyModifiers.Shift)) sp *= 4; if (mods.HasFlag(KeyModifiers.Control)) sp *= 0.25f;
         var f = Forward(); var flat = new Vector3(f.X, 0, f.Z); if (flat.LengthSquared() < 1e-6f) flat = Dir(Fly ? lookYaw : yaw + MathF.PI, 0); flat = Vector3.Normalize(flat);

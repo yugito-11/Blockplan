@@ -71,7 +71,7 @@
         <StackPanel Orientation="Horizontal" Spacing="10">
           <ToggleButton x:Name="FlyBtn" Content="Flugmodus (F)" Foreground="White" Padding="10,4"/>
           <TextBlock Text="Tempo" Foreground="#C8D2CB" VerticalAlignment="Center" FontSize="12"/>
-          <Slider x:Name="SpeedSlider" Minimum="2" Maximum="150" Value="20" Width="120" VerticalAlignment="Center"/>
+          <Slider x:Name="SpeedSlider" Minimum="1" Maximum="60" Value="8" Width="120" VerticalAlignment="Center"/>
           <TextBlock x:Name="SpeedVal" Foreground="White" VerticalAlignment="Center" FontSize="12" MinWidth="70"/>
         </StackPanel>
       </Border>

@@ -45,7 +45,10 @@ public sealed class McAssets
     }
 
     /// <summary>Neueste Vollversion in .minecraft\versions oder eine schon heruntergeladene Datei.</summary>
-    public static string? FindJar()
+    public static string? FindJar() => FindJars().FirstOrDefault();
+
+    /// <summary>Alle passenden Spieldateien, neueste zuerst.</summary>
+    public static List<string> FindJars()
     {
         var cands = new List<(string ver, string path)>();
         var vd = Path.Combine(MinecraftDir, "versions");
@@ -57,9 +60,14 @@ public sealed class McAssets
             }
         foreach (var f in Directory.GetFiles(Store.Dir, "minecraft-*.jar"))
             cands.Add((Path.GetFileNameWithoutExtension(f)[10..], f));
-        if (cands.Count == 0) return null;
         cands.Sort((a, b) => CmpVer(b.ver, a.ver));
-        return cands[0].path;
+        return cands.Select(c => c.path).ToList();
+    }
+
+    /// <summary>Kurzes Protokoll unter %LOCALAPPDATA%\Blockplan\blockplan.log, damit Fehler nachvollziehbar sind.</summary>
+    public static void Log(string msg)
+    {
+        try { File.AppendAllText(Path.Combine(Store.Dir, "blockplan.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {msg}{Environment.NewLine}"); } catch { }
     }
 
     /// <summary>Lädt die aktuelle Spieldatei direkt von Mojang (einmalig, ca. 40 MB).</summary>

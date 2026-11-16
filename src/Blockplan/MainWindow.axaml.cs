@@ -56,7 +56,7 @@ public partial class MainWindow : Window
         FlyBtn.Click += (_, _) => { View3.SetFly(FlyBtn.IsChecked == true); View3.Focus(); };
         View3.FlyChanged += on => { FlyBtn.IsChecked = on; ShowTab(1); };
         SpeedSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { View3.Speed = (float)SpeedSlider.Value; SpeedVal.Text = $"{SpeedSlider.Value:0} Blöcke/s"; } };
-        SpeedVal.Text = "20 Blöcke/s";
+        SpeedVal.Text = "8 Blöcke/s";
         View3.Status += s => { StatusText.Text = s; StatusBox.IsVisible = s.Length > 0 && View3.IsVisible; };
         AddHandler(DragDrop.DropEvent, OnDrop); DragDrop.SetAllowDrop(this, true);
         KeyDown += (_, e) =>
@@ -128,18 +128,32 @@ public partial class MainWindow : Window
     async Task LoadTextures(string? jar)
     {
         var prog = new Progress<string>(s => TexInfo.Text = s);
-        try
+        // Reihenfolge: gewählte Datei, sonst alle gefundenen Spieldateien (neueste zuerst), zuletzt Download von Mojang
+        var tries = jar != null ? new List<string?> { jar } : McAssets.FindJars().Select(j => (string?)j).Append(null).ToList();
+        McAssets.Log($"Texturen: Minecraft-Ordner {McAssets.MinecraftDir} (vorhanden: {Directory.Exists(McAssets.MinecraftDir)}), Kandidaten: {string.Join(", ", tries.Select(t => t ?? "Download"))}");
+        var errors = new List<string>();
+        foreach (var t in tries)
         {
-            jar ??= McAssets.FindJar();
-            if (jar == null) jar = await McAssets.DownloadAsync(prog);
-            var m = await Task.Run(() => McAssets.Load(jar, prog));
-            await m.LoadGermanAsync(); m.ApplyNames();
-            mc = m; atlas = new Atlas(m);
-            store.Set("jar", jar);
-            TexInfo.Text = $"Original-Texturen aus Minecraft {m.Version} ({m.Tex.Count}).";
-            ApplyProjectToViews(false);
+            try
+            {
+                var path = t ?? await McAssets.DownloadAsync(prog);
+                var m = await Task.Run(() => McAssets.Load(path, prog));
+                if (m.Tex.Count < 100 || m.Faces.Count < 100) throw new InvalidDataException($"In {Path.GetFileName(path)} sind keine Block-Texturen ({m.Tex.Count}).");
+                await m.LoadGermanAsync(); m.ApplyNames();
+                mc = m; atlas = new Atlas(m);
+                store.Set("jar", path);
+                TexInfo.Text = $"Original-Texturen aus Minecraft {m.Version} ({m.Tex.Count}).";
+                McAssets.Log($"Texturen geladen aus {path}: {m.Tex.Count} Bilder, {m.Faces.Count} Blöcke");
+                ApplyProjectToViews(false);
+                return;
+            }
+            catch (Exception e)
+            {
+                errors.Add((t == null ? "Download" : Path.GetFileName(t)) + ": " + e.Message);
+                McAssets.Log("Texturen fehlgeschlagen (" + (t ?? "Download") + "): " + e);
+            }
         }
-        catch (Exception e) { TexInfo.Text = "Keine Texturen: " + e.Message + " Wähle die .jar aus .minecraft\\versions selbst."; }
+        TexInfo.Text = "Keine Texturen. " + string.Join(" · ", errors) + " – Wähle die .jar selbst oder schau in blockplan.log.";
     }
 
     async Task PickJar()
