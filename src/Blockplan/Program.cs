@@ -14,6 +14,12 @@ class Program
         var de = new System.Globalization.CultureInfo("de-DE");
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture = de; System.Globalization.CultureInfo.CurrentCulture = de;
         if (args.Length >= 2 && args[0] == "--selftest") return Core.SelfTest.Run(args[1]);
+        if (args.Length >= 1 && args[0] == "--checkupdate")
+        {
+            var r = Core.Updater.CheckAsync().GetAwaiter().GetResult();
+            Console.WriteLine($"aktuell {Core.Updater.CurrentText} → " + (r == null ? "kein Update" : $"Update {r.Version}, {r.Size} Bytes, {r.Url}"));
+            return 0;
+        }
         if (args.Length >= 2 && args[0] == "--import")
         {   // Projekte aus dem Artefakt ohne Fenster in die Datenbank übernehmen
             using var st = new Core.Store();

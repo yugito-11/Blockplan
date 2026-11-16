@@ -4,7 +4,7 @@
         xmlns:local="using:Blockplan"
         x:Class="Blockplan.MainWindow"
         Title="Blockplan" Width="1440" Height="900" MinWidth="980" MinHeight="600"
-        WindowStartupLocation="CenterScreen" Icon="/Assets/blockplan.ico">
+        WindowStartupLocation="CenterScreen" WindowState="Maximized" Icon="/Assets/blockplan.ico">
   <Window.Styles>
     <Style Selector="TextBlock.h">
       <Setter Property="FontSize" Value="11"/><Setter Property="FontWeight" Value="SemiBold"/>
@@ -48,6 +48,12 @@
         </Border>
 
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+          <Border x:Name="UpdateBox" IsVisible="False" Background="{DynamicResource AccentBrush}" CornerRadius="10" Padding="12,10" Margin="0,0,0,6">
+            <StackPanel Spacing="6">
+              <TextBlock x:Name="UpdateText" Foreground="White" TextWrapping="Wrap" FontSize="12.5"/>
+              <Button x:Name="BtnUpdate" Content="Jetzt neu starten" IsVisible="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Background="White" Foreground="Black"/>
+            </StackPanel>
+          </Border>
           <TextBlock Text="PROJEKT" Classes="h" Margin="4,0,0,0"/>
           <ComboBox x:Name="ProjSel" HorizontalAlignment="Stretch" Height="38" FontWeight="SemiBold"/>
           <Button x:Name="BtnOpen" Classes="accent" Content="Schematic öffnen …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="40"/>

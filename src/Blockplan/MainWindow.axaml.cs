@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         BtnOpen.Click += async (_, _) => await OpenSchematic();
         BtnImport.Click += async (_, _) => await ImportArtifact();
         BtnJar.Click += async (_, _) => await PickJar();
+        BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
         BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
         BtnFit.Click += (_, _) => { Plan.ResetView(); View3.ResetView(); };
@@ -97,6 +98,7 @@ public partial class MainWindow : Window
     /* ---------- Start ---------- */
     async Task Startup()
     {
+        Updater.CleanUp(); _ = CheckUpdate();
         RefreshList(); UpdateDbInfo();
         if (double.TryParse(store.Get("mouse"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ms)) MouseSlider.Value = ms;
         _ = LoadTextures(null);
@@ -124,7 +126,7 @@ public partial class MainWindow : Window
 
     void UpdateDbInfo()
     {
-        try { long len = new FileInfo(store.File).Length + (File.Exists(store.File + "-wal") ? new FileInfo(store.File + "-wal").Length : 0); DbInfo.Text = $"{store.List().Count} Projekte in der eigenen Datenbank ({len / 1024.0 / 1024:0.0} MB):\n{store.File}"; }
+        try { long len = new FileInfo(store.File).Length + (File.Exists(store.File + "-wal") ? new FileInfo(store.File + "-wal").Length : 0); DbInfo.Text = $"Blockplan {Updater.CurrentText} · {store.List().Count} Projekte in der eigenen Datenbank ({len / 1024.0 / 1024:0.0} MB):\n{store.File}"; }
         catch { DbInfo.Text = store.File; }
     }
 
@@ -160,6 +162,23 @@ public partial class MainWindow : Window
         TexInfo.Text = "Blockplan findet kein Minecraft Java auf diesem PC und kommt selbst nicht zu Mojang durch (" + string.Join(" · ", errors) +
             "). Klick auf „Im Browser laden“: Die Datei client.jar wird dann gefunden, sobald sie in Downloads liegt.";
         BtnBrowserJar.IsVisible = true;
+    }
+
+    /* ---------- Selbst-Update ---------- */
+    string? updateFile;
+    async Task CheckUpdate()
+    {
+        if (Updater.ExePath == null) return; // nur in der echten .exe
+        try
+        {
+            await Task.Delay(2500);
+            var r = await Updater.CheckAsync(); if (r == null) return;
+            UpdateBox.IsVisible = true; UpdateText.Text = $"Neue Version {r.Version} wird geladen …";
+            updateFile = await Updater.DownloadAsync(r, new Progress<int>(p => UpdateText.Text = $"Neue Version {r.Version} wird geladen … {p} %"));
+            UpdateText.Text = $"Version {r.Version} ist bereit (du hast {Updater.CurrentText}).";
+            BtnUpdate.IsVisible = true;
+        }
+        catch (Exception e) { McAssets.Log("Update: " + e.Message); if (UpdateBox.IsVisible) UpdateText.Text = "Update konnte nicht geladen werden: " + e.Message; }
     }
 
     DispatcherTimer? jarWatch;
