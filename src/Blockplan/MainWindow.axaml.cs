@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         BtnOpen.Click += async (_, _) => await OpenSchematic();
         BtnImport.Click += async (_, _) => await ImportArtifact();
         BtnJar.Click += async (_, _) => await PickJar();
+        BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
         BtnFit.Click += (_, _) => { Plan.ResetView(); View3.ResetView(); };
         ProjSel.SelectionChanged += async (_, _) => { if (!loadingUi && ProjSel.SelectedItem is ProjectInfo pi && pi.Id != project?.Id) await OpenProject(pi.Id); };
@@ -156,7 +157,28 @@ public partial class MainWindow : Window
                 McAssets.Log("Texturen fehlgeschlagen (" + (t ?? "Download") + "): " + e);
             }
         }
-        TexInfo.Text = "Keine Texturen. " + string.Join(" · ", errors) + " – Wähle die .jar selbst oder schau in blockplan.log.";
+        TexInfo.Text = "Blockplan findet kein Minecraft Java auf diesem PC und kommt selbst nicht zu Mojang durch (" + string.Join(" · ", errors) +
+            "). Klick auf „Im Browser laden“: Die Datei client.jar wird dann gefunden, sobald sie in Downloads liegt.";
+        BtnBrowserJar.IsVisible = true;
+    }
+
+    DispatcherTimer? jarWatch;
+    async Task DownloadInBrowser()
+    {
+        try { await Launcher.LaunchUriAsync(new Uri(McAssets.FallbackClientUrl)); }
+        catch { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(McAssets.FallbackClientUrl) { UseShellExecute = true }); }
+        TexInfo.Text = "Warte auf client.jar im Download-Ordner …";
+        jarWatch?.Stop();
+        jarWatch = new DispatcherTimer(TimeSpan.FromSeconds(3), DispatcherPriority.Background, async (_, _) =>
+        {
+            var jars = McAssets.FindJars(); if (jars.Count == 0) return;
+            jarWatch!.Stop(); BtnBrowserJar.IsVisible = false;
+            // in den eigenen Ordner kopieren, damit es auch nach dem Aufräumen von Downloads klappt
+            var dest = Path.Combine(Store.Dir, "minecraft-26.3.jar");
+            try { if (!File.Exists(dest)) File.Copy(jars[0], dest); } catch { dest = jars[0]; }
+            await LoadTextures(dest);
+        });
+        jarWatch.Start();
     }
 
     async Task PickJar()

@@ -56,6 +56,7 @@
             <StackPanel Spacing="6">
               <TextBlock Text="MINECRAFT-TEXTUREN" Classes="h"/>
               <TextBlock x:Name="TexInfo" Classes="note" Text="Suche Minecraft …"/>
+              <Button x:Name="BtnBrowserJar" Content="Im Browser laden" Classes="accent" FontSize="12" Padding="8,3" IsVisible="False"/>
               <Button x:Name="BtnJar" Content="Andere .jar wählen …" FontSize="12" Padding="8,3"/>
             </StackPanel>
           </Border>

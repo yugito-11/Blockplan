@@ -51,18 +51,40 @@ public sealed class McAssets
     public static List<string> FindJars()
     {
         var cands = new List<(string ver, string path)>();
-        var vd = Path.Combine(MinecraftDir, "versions");
-        if (Directory.Exists(vd))
-            foreach (var d in Directory.GetDirectories(vd))
-            {
-                var n = Path.GetFileName(d); var jar = Path.Combine(d, n + ".jar");
-                if (File.Exists(jar) && System.Text.RegularExpressions.Regex.IsMatch(n, @"^\d+(\.\d+)+$")) cands.Add((n, jar));
-            }
-        foreach (var f in Directory.GetFiles(Store.Dir, "minecraft-*.jar"))
-            cands.Add((Path.GetFileNameWithoutExtension(f)[10..], f));
-        cands.Sort((a, b) => CmpVer(b.ver, a.ver));
-        return cands.Select(c => c.path).ToList();
+        string app = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        void VersionsDir(string vd)
+        {   // Ordnerstruktur wie .minecraft\versions\<version>\<version>.jar
+            if (!Directory.Exists(vd)) return;
+            try { foreach (var d in Directory.GetDirectories(vd)) { var n = Path.GetFileName(d); var jar = Path.Combine(d, n + ".jar"); if (File.Exists(jar)) cands.Add((n, jar)); } } catch { }
+        }
+        VersionsDir(Path.Combine(MinecraftDir, "versions"));                                   // offizieller Launcher, TLauncher
+        VersionsDir(Path.Combine(app, "ModrinthApp", "meta", "versions"));                     // Modrinth
+        VersionsDir(Path.Combine(app, "com.modrinth.theseus", "meta", "versions"));
+        VersionsDir(Path.Combine(home, "curseforge", "minecraft", "Install", "versions"));    // CurseForge
+        VersionsDir(Path.Combine(app, ".minecraft", "versions"));
+        foreach (var root in new[] { Path.Combine(app, "PrismLauncher"), Path.Combine(app, "MultiMC"), Path.Combine(app, "PolyMC") })
+        {   // Prism/MultiMC: libraries\com\mojang\minecraft\<version>\minecraft-<version>-client.jar
+            var lib = Path.Combine(root, "libraries", "com", "mojang", "minecraft");
+            if (!Directory.Exists(lib)) continue;
+            try { foreach (var d in Directory.GetDirectories(lib)) foreach (var f in Directory.GetFiles(d, "*client*.jar")) cands.Add((Path.GetFileName(d), f)); } catch { }
+        }
+        try { foreach (var f in Directory.GetFiles(Store.Dir, "minecraft-*.jar")) cands.Add((Path.GetFileNameWithoutExtension(f)[10..], f)); } catch { }
+        var dl = Path.Combine(home, "Downloads");                                                // im Browser geladene client.jar
+        try { if (Directory.Exists(dl)) foreach (var f in Directory.GetFiles(dl, "*.jar")) cands.Add(("0", f)); } catch { }
+        // nur Dateien, in denen wirklich Block-Texturen stecken (Fabric/Forge-Hüllen fallen weg)
+        var ok = cands.Where(c => HasTextures(c.path)).GroupBy(c => c.path).Select(g => g.First()).ToList();
+        ok.Sort((a, b) => CmpVer(b.ver, a.ver));
+        return ok.Select(c => c.path).ToList();
     }
+
+    static bool HasTextures(string jar)
+    {
+        try { using var z = ZipFile.OpenRead(jar); return z.GetEntry("assets/minecraft/textures/block/stone.png") != null; }
+        catch { return false; }
+    }
+
+    /// <summary>Adresse der aktuellen Spieldatei für den Download im Browser (falls das Programm selbst nicht durchkommt).</summary>
+    public const string FallbackClientUrl = "https://piston-data.mojang.com/v1/objects/e877b6a07acd633fb3bb475002175cec036e7b87/client.jar";
 
     /// <summary>Kurzes Protokoll unter %LOCALAPPDATA%\Blockplan\blockplan.log, damit Fehler nachvollziehbar sind.</summary>
     public static void Log(string msg)
@@ -73,7 +95,20 @@ public sealed class McAssets
     /// <summary>Lädt die aktuelle Spieldatei direkt von Mojang (einmalig, ca. 40 MB).</summary>
     public static async Task<string> DownloadAsync(IProgress<string>? prog)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        try { return await DownloadOnce(prog, false); }
+        catch (HttpRequestException e) when (e.InnerException != null)
+        {
+            Log("Download, erster Versuch: " + e.InnerException);
+            prog?.Report("Zweiter Versuch …");
+            return await DownloadOnce(prog, true);
+        }
+    }
+
+    static async Task<string> DownloadOnce(IProgress<string>? prog, bool lenient)
+    {
+        var handler = new HttpClientHandler { CheckCertificateRevocationList = false };
+        if (lenient) handler.SslProtocols = System.Security.Authentication.SslProtocols.Tls12;
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
         prog?.Report("Frage Mojang nach der neuesten Version …");
         var man = JsonNode.Parse(await http.GetStringAsync("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"))!;
         var id = (string)man["latest"]!["release"]!;
