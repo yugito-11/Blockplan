@@ -177,6 +177,8 @@
             <StackPanel Spacing="6">
               <TextBlock Text="SPEICHER" Classes="h"/>
               <TextBlock x:Name="DbInfo" Classes="note"/>
+              <Button x:Name="BtnCheckUpdate" Content="Nach Updates suchen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,4,0,0"/>
+              <TextBlock x:Name="UpdateNote" Classes="note" Text=""/>
             </StackPanel>
           </Border>
         </StackPanel>

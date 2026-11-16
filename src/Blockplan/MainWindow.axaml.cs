@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         BtnOpen.Click += async (_, _) => await OpenSchematic();
         BtnImport.Click += async (_, _) => await ImportArtifact();
         BtnJar.Click += async (_, _) => await PickJar();
+        BtnCheckUpdate.Click += async (_, _) => await CheckUpdate(true);
         BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
         BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
@@ -166,19 +167,38 @@ public partial class MainWindow : Window
 
     /* ---------- Selbst-Update ---------- */
     string? updateFile;
-    async Task CheckUpdate()
+    bool updating, firstCheck = true; string? readyVersion; DispatcherTimer? updateTimer;
+
+    /// <summary>Beim Start, danach alle 10 Minuten und auf Knopfdruck: neue Version auf GitHub?</summary>
+    async Task CheckUpdate(bool manual = false)
     {
-        if (Updater.ExePath == null) return; // nur in der echten .exe
+        if (updateTimer == null && Updater.ExePath != null)
+        {
+            updateTimer = new DispatcherTimer(TimeSpan.FromMinutes(10), DispatcherPriority.Background, async (_, _) => await CheckUpdate());
+            updateTimer.Start();
+        }
+        if (Updater.ExePath == null) { if (manual) UpdateNote.Text = "Updates gibt es nur in der Blockplan.exe."; return; }
+        if (updating) return;
+        updating = true; if (manual) UpdateNote.Text = "Suche nach Updates …";
         try
         {
-            await Task.Delay(2500);
-            var r = await Updater.CheckAsync(); if (r == null) return;
-            UpdateBox.IsVisible = true; UpdateText.Text = $"Neue Version {r.Version} wird geladen …";
+            if (firstCheck) { firstCheck = false; await Task.Delay(2500); }   // Start nicht ausbremsen
+            var r = await Updater.CheckAsync();
+            if (r == null) { if (manual) UpdateNote.Text = $"Du hast die neueste Version ({Updater.CurrentText})."; return; }
+            if (r.Version == readyVersion) { if (manual) UpdateNote.Text = $"Version {r.Version} ist bereit – links auf „Jetzt neu starten“."; return; }
+            UpdateBox.IsVisible = true; BtnUpdate.IsVisible = false; UpdateText.Text = $"Neue Version {r.Version} wird geladen …";
             updateFile = await Updater.DownloadAsync(r, new Progress<int>(p => UpdateText.Text = $"Neue Version {r.Version} wird geladen … {p} %"));
+            readyVersion = r.Version;
             UpdateText.Text = $"Version {r.Version} ist bereit (du hast {Updater.CurrentText}).";
-            BtnUpdate.IsVisible = true;
+            BtnUpdate.IsVisible = true; if (manual) UpdateNote.Text = "";
         }
-        catch (Exception e) { McAssets.Log("Update: " + e.Message); if (UpdateBox.IsVisible) UpdateText.Text = "Update konnte nicht geladen werden: " + e.Message; }
+        catch (Exception e)
+        {
+            McAssets.Log("Update: " + e.Message);
+            if (manual) UpdateNote.Text = "Keine Verbindung zu GitHub: " + e.Message;
+            else if (UpdateBox.IsVisible && readyVersion == null) UpdateText.Text = "Update konnte nicht geladen werden: " + e.Message;
+        }
+        finally { updating = false; }
     }
 
     DispatcherTimer? jarWatch;
