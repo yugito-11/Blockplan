@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blockplan Overlay</title>
+<style>
+  /* Stream-Overlay für OBS (Browserquelle 420 × 900). Hintergrund durchsichtig. */
+  html,body{margin:0;background:transparent;color:#fff;font-family:"Segoe UI",system-ui,sans-serif;overflow:hidden}
+  #wrap{padding:12px;font-size:calc(16px * var(--size,1));line-height:1.3}
+  .title{font-weight:700;font-size:1.1em;margin-bottom:.4em;text-shadow:0 2px 3px rgba(0,0,0,.9),0 0 2px #000}
+  .title small{display:block;font-weight:500;font-size:.75em;opacity:.85}
+  .row{display:flex;gap:.5em;align-items:baseline;text-shadow:0 2px 3px rgba(0,0,0,.9),0 0 2px #000;margin:.12em 0}
+  .row b{min-width:3.2em;text-align:right;font-variant-numeric:tabular-nums;color:#ffd23a}
+  .box #wrap{background:rgba(14,20,16,.82);border:1px solid rgba(255,255,255,.15);border-radius:10px;margin:8px}
+  .box .row,.box .title{text-shadow:none}
+  .bars .row{flex-wrap:wrap;background:rgba(14,20,16,.78);border-radius:6px;padding:.25em .5em;text-shadow:none}
+  .bars .bar{flex-basis:100%;height:.35em;border-radius:.2em;background:rgba(255,255,255,.18);overflow:hidden}
+  .bars .bar i{display:block;height:100%;background:#e0478f}
+  .done{color:#7ee08f}
+  .muted{opacity:.7;font-size:.85em}
+</style>
+</head>
+<body>
+<div id="wrap"><div class="muted">Verbinde …</div></div>
+<script>
+(function(){
+  const q=new URLSearchParams(location.search),t=q.get('t')||'',style=q.get('style')||'clean',alpha=+(q.get('alpha')||100)/100,
+        openOnly=q.get('open')!=='0',rows=+(q.get('rows')||15),size=+(q.get('size')||1);
+  document.body.className=style;document.documentElement.style.setProperty('--size',size);document.body.style.opacity=alpha;
+  const wrap=document.getElementById('wrap'),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function render(o){
+    if(!o||!o.rows){wrap.innerHTML='<div class="muted">Noch keine Daten. Blockplan im Browser öffnen.</div>';return;}
+    let list=o.rows;if(openOnly)list=list.filter(r=>r[1]>0);if(rows>0)list=list.slice(0,rows);
+    const pct=o.total?Math.round((o.total-o.open)/o.total*100):0;
+    let h=`<div class="title">${esc(o.title||'Bauplan')}<small>${o.world?`${pct} % gebaut · noch ${o.open.toLocaleString('de-DE')} Blöcke`:`${o.total.toLocaleString('de-DE')} Blöcke`}</small></div>`;
+    if(!list.length)h+='<div class="row done">Alles gesetzt!</div>';
+    for(const [n,open,tot] of list){
+      const p=tot?Math.round((tot-open)/tot*100):0;
+      h+=`<div class="row"><b>${(openOnly||!o.world?open:open+'/'+tot).toLocaleString('de-DE')}</b><span>${esc(n)}</span>${style==='bars'?`<span class="bar"><i style="width:${p}%"></i></span>`:''}</div>`;
+    }
+    wrap.innerHTML=h;
+  }
+  function connect(){
+    const es=new EventSource('/api/stream?t='+encodeURIComponent(t));
+    es.addEventListener('overlay',e=>{try{render(JSON.parse(e.data));}catch(x){}});
+    es.onerror=()=>{if(es.readyState===2){setTimeout(connect,3000);}};
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

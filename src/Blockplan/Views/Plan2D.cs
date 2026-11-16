@@ -22,7 +22,7 @@ public sealed class Plan2D : Control
     int layer, top;
     double scale = 4; Point off; bool fitted;
     Point? dragFrom;
-    WriteableBitmap? map; ushort[]? topV; short[]? topY; int buildGen;
+    WriteableBitmap? map; ushort[]? topV; short[]? topY; byte[]? topStatus; int buildGen;
     readonly Dictionary<int, WriteableBitmap> tileBmp = new();
     public event Action<string>? Hover;
 
@@ -70,7 +70,8 @@ public sealed class Plan2D : Control
                         for (int y = tc; y >= 0; y--) { var v = pr.Cells[y * WD + c]; if (v != 0) { tv[c] = v; ty[c] = (short)y; break; } }
                     }
                 });
-            var px = new uint[WD];
+            var px = new uint[WD]; var lv = Live; bool prog = ShowProgress && lv != null && (lv.Known || !lv.Chunks.IsEmpty);
+            var stt = prog ? new byte[WD] : null;
             Parallel.For(0, D, z =>
             {
                 for (int x = 0; x < W; x++)
@@ -83,6 +84,12 @@ public sealed class Plan2D : Control
                         double f = 1 + Math.Clamp((h - hn) + (h - hw) * .5, -3, 3) * .07;
                         col = 0xff000000 | (uint)Math.Clamp(((col >> 16) & 255) * f, 0, 255) << 16 | (uint)Math.Clamp(((col >> 8) & 255) * f, 0, 255) << 8 | (uint)Math.Clamp((col & 255) * f, 0, 255);
                     }
+                    if (stt != null)
+                    {   // Baufortschritt: fehlt = hellblau, falsch = rot, gesetzt = wie geplant
+                        byte st = lv!.Status(pr, x, ty[c], z, v); stt[c] = st;
+                        uint Mix(uint a2, uint b2, double t) => 0xff000000 | (uint)(((a2 >> 16) & 255) * (1 - t) + ((b2 >> 16) & 255) * t) << 16 | (uint)(((a2 >> 8) & 255) * (1 - t) + ((b2 >> 8) & 255) * t) << 8 | (uint)((a2 & 255) * (1 - t) + (b2 & 255) * t);
+                        if (st == 3) col = Mix(col, 0x7ec8ff, .6); else if (st == 2) col = Mix(col, 0xff3b3b, .65);
+                    }
                     px[c] = col;
                 }
             });
@@ -92,7 +99,7 @@ public sealed class Plan2D : Control
                 var bm = new WriteableBitmap(new PixelSize(W, D), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
                 using (var fb = bm.Lock())
                     unsafe { var dst = (uint*)fb.Address; for (int z = 0; z < D; z++) { var row = dst + (long)z * fb.RowBytes / 4; for (int x = 0; x < W; x++) row[x] = px[(long)z * W + x]; } }
-                map?.Dispose(); map = bm; topV = tv; topY = ty; InvalidateVisual();
+                map?.Dispose(); map = bm; topV = tv; topY = ty; topStatus = stt; InvalidateVisual();
             });
         });
     }
@@ -111,7 +118,8 @@ public sealed class Plan2D : Control
         if (p == null || map == null) return;
         if (!fitted) Fit();
         var area = new Rect(off.X, off.Y, p.W * scale, p.D * scale);
-        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1c, 0x26, 0x1f)), area);
+        DrawSurroundings(ctx);
+        ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x1c, 0x26, 0x1f), Live != null && ShowSurroundings && !Live.Chunks.IsEmpty ? .35 : 1), area);
         using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.None }))
         {
             if (scale < 7 || topV == null) ctx.DrawImage(map, new Rect(0, 0, p.W, p.D), area);
@@ -132,6 +140,7 @@ public sealed class Plan2D : Control
                     var b = Blocks.Get(v); int tile = b.Shape == 'm' ? atlas!.Cross(v) : atlas!.Faces(v)[2];
                     var dr = b.Shape is 'p' or 'm' ? r.Deflate(scale * (b.Shape == 'p' ? .3 : .2)) : r;
                     ctx.DrawImage(Tile(tile), new Rect(0, 0, 16, 16), dr);
+                    if (topStatus is { } ts && ts[c] is 2 or 3) ctx.FillRectangle(new SolidColorBrush(ts[c] == 3 ? Color.FromRgb(0x7e, 0xc8, 0xff) : Color.FromRgb(0xff, 0x3b, 0x3b), .5), r);
                     if (!LayerMode)
                     {
                         int h = topY![c], hn = z > 0 ? topY[c - p.W] : h, hw = x > 0 ? topY[c - 1] : h; double f = Math.Clamp((h - hn) + (h - hw) * .5, -3, 3) * .07;
@@ -157,9 +166,74 @@ public sealed class Plan2D : Control
         }
         ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0xec, 0x5f, 0x9b)), 1.5), area);
         DrawOverlays(ctx);
+        DrawPlayers(ctx);
         // Norden-Pfeil
         var ft = new FormattedText("N ▲", System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface("Inter", FontStyle.Normal, FontWeight.Bold), 12, Brushes.White);
         ctx.DrawText(ft, new Point(Bounds.Width / 2 - ft.Width / 2, 8));
+    }
+
+    /* ---------- Live: Spieler, Baufortschritt, Umgebung ---------- */
+    public LiveClient? Live { get; set; }
+    public bool ShowProgress { get; set; } = true;
+    public bool ShowSurroundings { get; set; } = true;
+    readonly Dictionary<(int, int), WriteableBitmap> chunkImg = new();
+    DateTime lastLiveMap;
+
+    /// <summary>Welt hat sich geändert: Karte höchstens einmal pro Sekunde neu berechnen.</summary>
+    public void LiveChanged(List<(int cx, int cz)> chunks)
+    {
+        foreach (var k in chunks) if (chunkImg.Remove(k, out var b)) b.Dispose();
+        if (ShowProgress && (DateTime.Now - lastLiveMap).TotalMilliseconds > 1000) { lastLiveMap = DateTime.Now; RebuildMap(); }
+        else InvalidateVisual();
+    }
+    public void LiveReset() { foreach (var b in chunkImg.Values) b.Dispose(); chunkImg.Clear(); RebuildMap(); }
+
+    WriteableBitmap ChunkImage(StandChunk c)
+    {
+        if (chunkImg.TryGetValue((c.Cx, c.Cz), out var b)) return b;
+        var px = new uint[256]; var top = new int[256];
+        for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
+        {
+            top[z * 16 + x] = -1;
+            for (int y = c.H - 1; y >= 0; y--) { var v = c.At(x, y, z); if (v != 0 && v != LiveClient.Unloaded) { px[z * 16 + x] = atlas!.TopColor(v); top[z * 16 + x] = y; break; } }
+        }
+        for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++)
+        {
+            int i = z * 16 + x; if (top[i] < 0) continue; int h = top[i], hn = z > 0 ? top[i - 16] : h, hw = x > 0 ? top[i - 1] : h;
+            double f = (1 + Math.Clamp((h - hn) + (h - hw) * .5, -3, 3) * .07) * .82; uint col = px[i];
+            px[i] = 0xff000000 | (uint)Math.Clamp(((col >> 16) & 255) * f, 0, 255) << 16 | (uint)Math.Clamp(((col >> 8) & 255) * f, 0, 255) << 8 | (uint)Math.Clamp((col & 255) * f, 0, 255);
+        }
+        b = new WriteableBitmap(new PixelSize(16, 16), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
+        using (var fb = b.Lock()) unsafe { var dst = (uint*)fb.Address; for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) dst[z * fb.RowBytes / 4 + x] = px[z * 16 + x]; }
+        return chunkImg[(c.Cx, c.Cz)] = b;
+    }
+
+    void DrawSurroundings(DrawingContext ctx)
+    {
+        var lv = Live; if (lv == null || !ShowSurroundings || p == null || atlas == null || lv.Chunks.IsEmpty) return;
+        using (ctx.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.None }))
+            foreach (var c in lv.Chunks.Values)
+            {
+                double x = c.Cx * 16 - p.OriginX, z = c.Cz * 16 - p.OriginZ;
+                var r = new Rect(S(x, z), new Size(16 * scale, 16 * scale));
+                if (r.Right < 0 || r.Bottom < 0 || r.X > Bounds.Width || r.Y > Bounds.Height) continue;
+                ctx.DrawImage(ChunkImage(c), new Rect(0, 0, 16, 16), r);
+            }
+    }
+
+    void DrawPlayers(DrawingContext ctx)
+    {
+        var lv = Live; if (lv == null || p == null) return;
+        foreach (var q in lv.Players.Where(q => q.Dim == lv.Dim))
+        {
+            var c = S(q.X - p.OriginX, q.Z - p.OriginZ); uint col = View3D.PlayerColor(q.Name);
+            var br = new SolidColorBrush(Color.FromRgb((byte)(col >> 16), (byte)(col >> 8), (byte)col));
+            // Blickrichtung (Minecraft: 0° = Süden, im Uhrzeigersinn)
+            double a = q.Yaw * Math.PI / 180; var tip = c + new Point(-Math.Sin(a) * 14, Math.Cos(a) * 14);
+            ctx.DrawLine(new Pen(br, 3), c, tip);
+            ctx.DrawEllipse(br, new Pen(Brushes.White, 2), c, 7, 7);
+            Tag(ctx, $"{q.Name}  Y {Math.Floor(q.Y)}", c + new Point(0, -20), br);
+        }
     }
 
     /* ---------- Planungs-Ebenen: Baupläne, Hilfslinien, Punkte, Messung, Auswahl ---------- */

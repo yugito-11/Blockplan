@@ -14,6 +14,21 @@ public sealed class MeshChunk
     public uint[] I = Array.Empty<uint>();
     /// <summary>Halb durchsichtig (Wasser, Eis, farbiges Glas …): wird nach dem Rest mit Überblendung gezeichnet.</summary>
     public bool Translucent;
+    /// <summary>Bereich (32×32 Spalten) im Projekt, damit man ihn einzeln neu bauen kann.</summary>
+    public int Region;
+}
+
+/// <summary>Zusätze für den Live-Modus und für Umgebungs-Chunks.</summary>
+public sealed class MeshOptions
+{
+    /// <summary>Nur diese Bereiche bauen (null = alle).</summary>
+    public HashSet<int>? Regions;
+    /// <summary>Baufortschritt je Feld (x, y, z, Plan-Block): 1 gesetzt, 2 falsch, 3 fehlt, 4 unbekannt.</summary>
+    public Func<int, int, int, int, byte>? Status;
+    /// <summary>Statt Projektmitte: eigene Lage in der Szene (für Umgebungs-Chunks).</summary>
+    public bool UseOffset; public float OffX, OffY, OffZ;
+    /// <summary>Kennzeichen aller Flächen (3 = Hilfslinie/Farbe, sonst 0).</summary>
+    public float Flag;
 }
 
 /// <summary>
@@ -32,6 +47,9 @@ public static class Mesher
     sealed record Box(float X0, float Y0, float Z0, float X1, float Y1, float Z1);
     static readonly Box Full = new(0, 0, 0, 1, 1, 1);
     static readonly Box[] WaterTop = { new(0, 0, 0, 1, .875f, 1) };
+    /// <summary>Zahlen je Ecke: x, y, z, u, v, td (Kachel*8 + Richtung), Kennzeichen (0 normal, 1 fehlt, 2 falsch, 3 Farbe).</summary>
+    public const int Stride = 7;
+    static readonly float[] Unit = { 0, 1, 1, 1, 1, 0, 0, 0 };
 
     /// <summary>Kachel überwiegend halb durchsichtig (nicht nur Löcher wie bei Glas oder Laub)?</summary>
     static bool IsSemi(byte[] px)
@@ -80,7 +98,11 @@ public static class Mesher
         }
     }
 
-    public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default)
+    /// <summary>Anzahl Bereiche (32×32 Spalten) eines Projekts und Bereich einer Spalte.</summary>
+    public static int RegionsX(int w) => (w + R - 1) / R;
+    public static int RegionOf(int w, int x, int z) => (z / R) * RegionsX(w) + x / R;
+
+    public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default, MeshOptions? opt = null)
     {
         int n = Blocks.Count; var kind = new byte[n]; var boxes = new Box[n][]; var ft = new int[n][]; var cr = new int[n]; var bas = new int[n]; var trans = new bool[n];
         var opq = new bool[n]; var fam = new byte[n];
@@ -102,23 +124,29 @@ public static class Mesher
             }
         }
         int W0 = p.W, D0 = p.D, H = Math.Min(top, p.H - 1) + 1; long SY = (long)W0 * D0; var cells = p.Cells;
-        float ox = -W0 / 2f, oz = -D0 / 2f;
-        bool Opaque(long i) => opq[cells[i]];
-        var regs = new List<(int x0, int z0)>();
+        float ox = opt?.UseOffset == true ? opt.OffX : -W0 / 2f, oz = opt?.UseOffset == true ? opt.OffZ : -D0 / 2f, offY = opt?.OffY ?? 0, baseFl = opt?.Flag ?? 0;
+        var status = opt?.Status;
+        // Baufortschritt: fehlende oder falsche Blöcke verdecken nichts (sie werden durchscheinend gezeigt)
+        byte St(long i) { int x = (int)(i % W0), z = (int)(i / W0 % D0), y = (int)(i / SY); return status!(x, y, z, cells[i]); }
+        bool Ghost(long i) => status != null && cells[i] != 0 && St(i) is 2 or 3;
+        bool Opaque(long i) => opq[cells[i]] && (status == null || !Ghost(i));
+        var regs = new List<(int x0, int z0)>(); int rx = RegionsX(W0);
         for (int z0 = 0; z0 < D0; z0 += R) for (int x0 = 0; x0 < W0; x0 += R) regs.Add((x0, z0));
+        var todoR = opt?.Regions != null ? opt.Regions.Where(r => r >= 0 && r < regs.Count).ToList() : Enumerable.Range(0, regs.Count).ToList();
         var outp = new MeshChunk?[regs.Count * 2];
-        Parallel.For(0, regs.Count, new ParallelOptions { CancellationToken = ct }, ri =>
+        Parallel.For(0, todoR.Count, new ParallelOptions { CancellationToken = ct }, ti =>
         {
+            int ri = todoR[ti];
             var (x0, z0) = regs[ri];
             int W = Math.Min(R, W0 - x0), D = Math.Min(R, D0 - z0); int nn = W * D * H;
             var cv = new ushort[nn]; var ex = new byte[nn]; bool any = false;
             var Vo = new List<float>(); var Io = new List<uint>(); var Vt = new List<float>(); var It = new List<uint>();
-            bool curT = false;
+            bool curT = false; float curFl = baseFl;
             void Quad(float[] c, float[] uv, int td, bool flip)
             {
                 var V = curT ? Vt : Vo; var I = curT ? It : Io;
-                uint b0 = (uint)(V.Count / 6);
-                for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1]); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(td); }
+                uint b0 = (uint)(V.Count / Stride);
+                for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1] + offY); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(td); V.Add(curFl); }
                 if (flip) { I.Add(b0); I.Add(b0 + 2); I.Add(b0 + 1); I.Add(b0); I.Add(b0 + 3); I.Add(b0 + 2); }
                 else { I.Add(b0); I.Add(b0 + 1); I.Add(b0 + 2); I.Add(b0); I.Add(b0 + 2); I.Add(b0 + 3); }
             }
@@ -134,6 +162,23 @@ public static class Mesher
                     bool nPX = gx + 1 < W0 && Opaque(i + 1), nNX = gx > 0 && Opaque(i - 1);
                     bool nPY = y + 1 < H && Opaque(i + SY), nNY = y > 0 && Opaque(i - SY);
                     bool nPZ = gz + 1 < D0 && Opaque(i + W0), nNZ = gz > 0 && Opaque(i - W0);
+                    if (status != null)
+                    {
+                        byte st = St(i);
+                        if (st is 2 or 3)
+                        {   // fehlt (hellblau) oder falscher Block (rot): durchscheinender Würfel mit den Plan-Texturen
+                            var gf = atlas.Faces(v); float X0 = gx + ox, Z0 = gz + oz, X1 = X0 + 1, Z1 = Z0 + 1, Y0 = y, Y1 = y + 1f;
+                            curT = true; curFl = st == 3 ? 1 : 2;
+                            bool G(long j, bool inb) => inb && Ghost(j);
+                            if (!nPX && !G(i + 1, gx + 1 < W0)) Quad(new[] { X1, Y0, Z0, X1, Y0, Z1, X1, Y1, Z1, X1, Y1, Z0 }, Unit, gf[0] * 8 + 0, true);
+                            if (!nNX && !G(i - 1, gx > 0)) Quad(new[] { X0, Y0, Z0, X0, Y0, Z1, X0, Y1, Z1, X0, Y1, Z0 }, Unit, gf[1] * 8 + 1, false);
+                            if (!nPY && !G(i + SY, y + 1 < H)) Quad(new[] { X0, Y1, Z0, X1, Y1, Z0, X1, Y1, Z1, X0, Y1, Z1 }, Unit, gf[2] * 8 + 2, true);
+                            if (!nNY && !G(i - SY, y > 0)) Quad(new[] { X0, Y0, Z0, X1, Y0, Z0, X1, Y0, Z1, X0, Y0, Z1 }, Unit, gf[3] * 8 + 3, false);
+                            if (!nPZ && !G(i + W0, gz + 1 < D0)) Quad(new[] { X0, Y0, Z1, X1, Y0, Z1, X1, Y1, Z1, X0, Y1, Z1 }, Unit, gf[4] * 8 + 4, false);
+                            if (!nNZ && !G(i - W0, gz > 0)) Quad(new[] { X0, Y0, Z0, X1, Y0, Z0, X1, Y1, Z0, X0, Y1, Z0 }, Unit, gf[5] * 8 + 5, true);
+                            curFl = baseFl; any = true; continue;
+                        }
+                    }
                     if (k == 5)
                     {   // echtes Blockmodell
                         int conn = 0, fv = fam[v];
@@ -201,7 +246,7 @@ public static class Mesher
                 }
             }
             curT = false;
-            if (!any) return;
+            if (!any) { outp[ri * 2] = new MeshChunk { Region = ri }; return; }
             // Zusammenfassen gleicher Flächen je Richtung und Schicht
             int[] dims = { W, H, D };
             for (int d = 0; d < 6; d++)
@@ -234,8 +279,8 @@ public static class Mesher
                         }
                 }
             }
-            if (Io.Count > 0) outp[ri * 2] = new MeshChunk { V = Vo.ToArray(), I = Io.ToArray() };
-            if (It.Count > 0) outp[ri * 2 + 1] = new MeshChunk { V = Vt.ToArray(), I = It.ToArray(), Translucent = true };
+            outp[ri * 2] = new MeshChunk { V = Vo.ToArray(), I = Io.ToArray(), Region = ri };
+            if (It.Count > 0) outp[ri * 2 + 1] = new MeshChunk { V = Vt.ToArray(), I = It.ToArray(), Translucent = true, Region = ri };
         });
         return outp.Where(m => m != null).Select(m => m!).ToList();
     }

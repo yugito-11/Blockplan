@@ -5,7 +5,7 @@ name: Windows-Version bauen
 on:
   push:
     branches: [main]
-    paths: ["src/**", ".github/workflows/release.yml"]
+    paths: ["src/**", "mod/dist/**", ".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
@@ -30,9 +30,9 @@ jobs:
         run: |
           VER=$(grep -oP '(?<=<Version>)[^<]+' src/Blockplan/Blockplan.csproj)
           if gh release view "v$VER" >/dev/null 2>&1; then echo "Release v$VER gibt es schon."; exit 0; fi
-          gh release create "v$VER" out/Blockplan.exe --target "$GITHUB_SHA" \
+          gh release create "v$VER" out/Blockplan.exe mod/dist/*.jar --target "$GITHUB_SHA" \
             --title "Blockplan $VER" \
-            --notes "Herunterladen: Blockplan.exe unten anklicken, speichern, doppelklicken. Windows warnt beim ersten Start (nicht signiert): „Weitere Informationen“ → „Trotzdem ausführen“."
+            --notes "Herunterladen: Blockplan.exe unten anklicken, speichern, doppelklicken. Windows warnt beim ersten Start (nicht signiert): „Weitere Informationen“ → „Trotzdem ausführen“. Die Datei blockplan-live-*.jar gehört in den mods-Ordner des Minecraft-Servers (Fabric) und liefert die Live-Verbindung."
       - uses: actions/upload-artifact@v4
         with:
           name: Blockplan

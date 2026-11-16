@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -72,7 +73,7 @@ public partial class MainWindow : Window
             if (e.Key == Avalonia.Input.Key.PageUp) LayerSlider.Value = Math.Min(LayerSlider.Maximum, LayerSlider.Value + 1);
             if (e.Key == Avalonia.Input.Key.PageDown) LayerSlider.Value = Math.Max(0, LayerSlider.Value - 1);
         };
-        InitPlanning();
+        InitPlanning(); InitLive();
         Opened += async (_, _) => await Startup();
         Closing += (_, _) => store.Dispose();
     }
@@ -89,7 +90,7 @@ public partial class MainWindow : Window
         Bar3D.IsVisible = t == 1; if (t == 1) Dispatcher.UIThread.Post(() => View3.Focus());
         StatusBox.IsVisible = t == 1 && StatusText.Text?.Length > 0;
         ModeRow.IsVisible = t == 0; LayerRow.IsVisible = t == 0 && ModeLayer.IsChecked == true;
-        ToolsCard.IsVisible = GuidesCard.IsVisible = t == 0;
+        ToolsCard.IsVisible = GuidesCard.IsVisible = t == 0; LiveCard.IsVisible = t is 0 or 1;
         ViewHint.Text = t switch
         {
             0 => "Ziehen = verschieben · Mausrad = zoomen · rechte Maustaste ziehen = messen · Bild auf/ab = Schicht wechseln",
@@ -113,7 +114,7 @@ public partial class MainWindow : Window
     /// <summary>Speichern gesammelt nach kurzer Pause (große Projekte brauchen dafür etwas Zeit).</summary>
     void ScheduleSave()
     {
-        UpdateCounts();
+        UpdateCounts(); View3.SetGuides(plan, Guides3DChk.IsChecked == true);
         saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, (_, _) => { saveTimer!.Stop(); SaveProject(); });
         saveTimer.Stop(); saveTimer.Start();
     }
@@ -124,6 +125,118 @@ public partial class MainWindow : Window
         NavStages.Content = ss.Count > 0 ? $"⟋  Etappen  ({ss.Count(x => x.Done)}/{ss.Count})" : "⟋  Etappen";
         int open = td.Count(x => !x.Done); NavTodos.Content = open > 0 ? $"✓  Team-To-dos  ({open})" : "✓  Team-To-dos";
         int np = plan?.Parts.Count(x => !x.Base) ?? 0; NavParts.Content = np > 0 ? $"◫  Baupläne  ({np})" : "◫  Baupläne";
+    }
+
+    /* ---------- Live-Server ---------- */
+    LiveClient? live; DateTime lastPlayersUi, lastProgress; bool progressBusy;
+
+    void InitLive()
+    {
+        LiveLink.Text = store.Get("liveLink") ?? "";
+        BtnLive.Click += (_, _) => ConnectLive();
+        BtnLiveStop.Click += (_, _) => { live?.Stop(); live = null; Plan.Live = null; View3.SetLive(null, false, false); Plan.LiveReset(); UpdateLiveUi(); };
+        LiveProgChk.IsCheckedChanged += (_, _) => ApplyLiveView();
+        LiveSurrChk.IsCheckedChanged += (_, _) => ApplyLiveView();
+        Guides3DChk.IsCheckedChanged += (_, _) => View3.SetGuides(plan, Guides3DChk.IsChecked == true);
+        Closing += (_, _) => live?.Dispose();
+    }
+
+    void ConnectLive()
+    {
+        if (project == null) return;
+        var link = LiveLink.Text?.Trim() ?? "";
+        store.Set("liveLink", link);
+        if (live == null)
+        {
+            live = new LiveClient();
+            live.StatusChanged += () => Dispatcher.UIThread.Post(UpdateLiveUi);
+            live.PlayersChanged += () => Dispatcher.UIThread.Post(() =>
+            {
+                Plan.InvalidateVisual(); View3.SetPlayers();
+                if ((DateTime.Now - lastPlayersUi).TotalMilliseconds > 700) { lastPlayersUi = DateTime.Now; RenderLivePlayers(); }
+            });
+            live.Changed += () => Dispatcher.UIThread.Post(() =>
+            {
+                if (live == null) return;
+                var (all, cells, chunks) = live.TakeChanges();
+                View3.LiveChanged(all, cells, chunks); Plan.LiveChanged(chunks);
+                if (all) Plan.LiveReset();
+                UpdateProgress();
+            });
+        }
+        live.Connect(link, project);
+        Plan.Live = live; ApplyLiveView(); UpdateLiveUi();
+    }
+
+    void ApplyLiveView()
+    {
+        Plan.ShowProgress = LiveProgChk.IsChecked == true; Plan.ShowSurroundings = LiveSurrChk.IsChecked == true; Plan.LiveReset();
+        View3.SetLive(live, LiveProgChk.IsChecked == true, LiveSurrChk.IsChecked == true);
+        UpdateProgress(true);
+    }
+
+    void UpdateLiveUi()
+    {
+        var st = live?.State ?? "aus";
+        LiveStatus.Text = st switch
+        {
+            "live" => $"Live · {live!.Players.Count} Spieler online",
+            "aus" => "Nicht verbunden.",
+            _ => live!.Message,
+        };
+        LiveDot.Background = new SolidColorBrush(st switch { "live" => Color.Parse("#5fc27e"), "fehler" => Color.Parse("#ec6f66"), "aus" => Colors.Gray, _ => Color.Parse("#dc9a52") });
+        BtnLiveStop.IsEnabled = live != null && st != "aus"; BtnLive.Content = live != null && st != "aus" ? "Neu verbinden" : "Verbinden";
+        RenderLivePlayers();
+    }
+
+    void RenderLivePlayers()
+    {
+        LivePlayers.Children.Clear();
+        var lv = live; if (lv == null || project == null || lv.State == "aus") return;
+        LivePlayers.Children.Add(new TextBlock { Text = $"Spieler online · {lv.Players.Count}", Classes = { "note" }, FontWeight = FontWeight.SemiBold });
+        foreach (var q in lv.Players)
+        {
+            bool same = q.Dim == lv.Dim; int gx = (int)Math.Floor(q.X) - project.OriginX, gy = (int)Math.Floor(q.Y) - project.OriginY, gz = (int)Math.Floor(q.Z) - project.OriginZ;
+            bool inside = same && gx >= 0 && gz >= 0 && gy >= 0 && gx < project.W && gz < project.D && gy < project.H;
+            string where = !same ? q.Dim.Replace("minecraft:", "") : inside ? $"in der Baustelle · Ebene {gy + 1}" : $"{Math.Round(Math.Sqrt((gx - project.W / 2.0) * (gx - project.W / 2.0) + (gz - project.D / 2.0) * (gz - project.D / 2.0)))} Blöcke entfernt";
+            uint col = View3D.PlayerColor(q.Name);
+            var row = new DockPanel { Margin = new Thickness(0, 2) };
+            var show = new Button { Content = "Zeigen", Padding = new Thickness(8, 2), FontSize = 12 }; DockPanel.SetDock(show, Dock.Right);
+            var qq = q; show.Click += (_, _) => { if (tab == 1) View3.LookAt(qq.X - project.OriginX - project.W / 2.0, qq.Y - project.OriginY, qq.Z - project.OriginZ - project.D / 2.0); else { ShowTab(0); Plan.CenterOn(qq.X - project.OriginX, qq.Z - project.OriginZ); } };
+            var dot = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(3), Background = new SolidColorBrush(Color.FromRgb((byte)(col >> 16), (byte)(col >> 8), (byte)col)), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+            DockPanel.SetDock(dot, Dock.Left);
+            row.Children.Add(show); row.Children.Add(dot);
+            row.Children.Add(new StackPanel { Children = { new TextBlock { Text = q.Name, FontWeight = FontWeight.SemiBold }, new TextBlock { Text = $"X {Math.Floor(q.X)}  Y {Math.Floor(q.Y)}  Z {Math.Floor(q.Z)} · {where}", Classes = { "note" }, TextWrapping = TextWrapping.Wrap } } });
+            LivePlayers.Children.Add(row);
+        }
+    }
+
+    /// <summary>Baufortschritt zählen (im Hintergrund, höchstens alle 2 Sekunden).</summary>
+    void UpdateProgress(bool force = false)
+    {
+        var lv = live; var p = project;
+        if (lv == null || p == null || LiveProgChk.IsChecked != true) { LiveProgress.Text = ""; return; }
+        if (progressBusy || (!force && (DateTime.Now - lastProgress).TotalSeconds < 2)) return;
+        progressBusy = true; lastProgress = DateTime.Now; int cut = (int)CutSlider.Value;
+        Task.Run(() =>
+        {
+            long ok = 0, bad = 0, miss = 0, unk = 0; long WD = (long)p.W * p.D; int H = Math.Min(cut, p.H - 1) + 1;
+            Parallel.For(0, H, () => (0L, 0L, 0L, 0L), (y, _, acc) =>
+            {
+                for (int z = 0; z < p.D; z++) for (int x = 0; x < p.W; x++)
+                {
+                    int v = p.Cells[y * WD + (long)z * p.W + x]; if (v == 0) continue;
+                    switch (lv.Status(p, x, y, z, v)) { case 1: acc.Item1++; break; case 2: acc.Item2++; break; case 3: acc.Item3++; break; default: acc.Item4++; break; }
+                }
+                return acc;
+            }, acc => { Interlocked.Add(ref ok, acc.Item1); Interlocked.Add(ref bad, acc.Item2); Interlocked.Add(ref miss, acc.Item3); Interlocked.Add(ref unk, acc.Item4); });
+            long n = ok + bad + miss + unk;
+            Dispatcher.UIThread.Post(() =>
+            {
+                progressBusy = false;
+                LiveProgress.Text = n == 0 ? "" : $"{ok:N0} von {n:N0} gesetzt ({(double)ok / n:P0})" + (bad > 0 ? $" · {bad:N0} falsch" : "") + (unk > 0 ? $" · {unk:N0} noch nicht gelesen" : "");
+            });
+        });
     }
 
     void InitPlanning()
@@ -298,6 +411,7 @@ public partial class MainWindow : Window
         if (Environment.GetEnvironmentVariable("BLOCKPLAN_OPEN") is { Length: > 0 } want) id = list.FirstOrDefault(p => p.Name.StartsWith(want, StringComparison.OrdinalIgnoreCase))?.Id ?? id;
         if (id != null) await OpenProject(id);
         else ShowEmpty();
+        if (Environment.GetEnvironmentVariable("BLOCKPLAN_LIVE") is { Length: > 0 } ll) { LiveLink.Text = ll; ConnectLive(); }   // zum Testen
         switch (Environment.GetEnvironmentVariable("BLOCKPLAN_TAB")) { case "3d": ShowTab(1); break; case "mat": ShowTab(2); break; case "parts": ShowTab(3); break; case "stages": ShowTab(4); break; case "todos": ShowTab(5); break; case "layer": ModeLayer.IsChecked = true; ShowTab(0); break; }
     }
 
@@ -449,6 +563,8 @@ public partial class MainWindow : Window
         loadingUi = false;
         RefreshList();
         plan = new PlanData(p); Plan.Plan = plan; Plan.HighlightPart = null;
+        View3.SetGuides(plan, Guides3DChk.IsChecked == true);
+        if (live != null && live.State != "aus") Dispatcher.UIThread.Post(ConnectLive);   // anderer Baubereich: neu beobachten
         ApplyProjectToViews(refit);
         ApplyView();
         UpdateSnowInfo(); UpdateCounts(); RenderPoints(); RenderGuides();

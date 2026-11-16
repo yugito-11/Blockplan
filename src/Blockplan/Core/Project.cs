@@ -126,7 +126,7 @@ public sealed class Project
 
     const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
     internal static string B36(long v) { if (v == 0) return "0"; var sb = new StringBuilder(); while (v > 0) { sb.Insert(0, digits[(int)(v % 36)]); v /= 36; } return sb.ToString(); }
-    static long P36(ReadOnlySpan<char> s) { long v = 0; foreach (var c in s) v = v * 36 + (c <= '9' ? c - '0' : char.ToLowerInvariant(c) - 'a' + 10); return v; }
+    internal static long P36(ReadOnlySpan<char> s) { long v = 0; foreach (var c in s) v = v * 36 + (c <= '9' ? c - '0' : char.ToLowerInvariant(c) - 'a' + 10); return v; }
 
     static string Rle(ushort[] a, Func<int, int> map)
     {

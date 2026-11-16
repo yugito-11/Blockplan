@@ -1,0 +1,21 @@
+{
+	"schemaVersion": 1,
+	"id": "blockplan_live",
+	"version": "${version}",
+	"name": "Blockplan Live",
+	"description": "Verbindet den Blockplan-Bauplaner live mit Minecraft: auf dem Server für alle oder im eigenen Spiel (auch auf fremden Servern) unter localhost.",
+	"authors": ["Blockplan"],
+	"license": "MIT",
+	"environment": "*",
+	"mixins": ["blockplan_live.mixins.json"],
+	"entrypoints": {
+		"main": ["de.blockplan.live.BlockplanLive"],
+		"client": ["de.blockplan.live.BlockplanLiveClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
