@@ -30,44 +30,116 @@ public sealed class ModelBank
 
     public ModelBank(Atlas a) { atlas = a; mc = a.Mc!; }
 
-    /* ---------- Familien, die sich mit Nachbarn verbinden ---------- */
-    public const int FamFence = 1, FamPane = 2, FamWall = 3;
+    /* ---------- Familien, die sich nach ihren Nachbarn richten ---------- */
+    public const int FamFence = 1, FamPane = 2, FamWall = 3, FamVine = 4, FamRedstone = 5, FamMushroom = 6, FamChorus = 7, FamTripwire = 8;
     public static int Family(int v)
     {
         var k = Blocks.Get(Blocks.BaseOf(v)).Key;
         if (k.EndsWith("_fence")) return FamFence;
         if (k.EndsWith("_pane") || k == "iron_bars") return FamPane;
         if (k.EndsWith("_wall")) return FamWall;
+        if (k is "vine" or "glow_lichen" or "sculk_vein" or "resin_clump") return FamVine;
+        if (k == "redstone_wire") return FamRedstone;
+        if (k is "brown_mushroom_block" or "red_mushroom_block" or "mushroom_stem") return FamMushroom;
+        if (k == "chorus_plant") return FamChorus;
+        if (k == "tripwire") return FamTripwire;
         return 0;
     }
     public static bool IsGate(int v) => Blocks.Get(Blocks.BaseOf(v)).Key.EndsWith("_fence_gate");
+    static string K(int v) => v == 0 ? "" : Blocks.Get(Blocks.BaseOf(v)).Key;
+    static readonly HashSet<string> RedstoneParts = new() { "redstone_wire", "repeater", "comparator", "redstone_torch", "redstone_wall_torch", "redstone_block", "lever", "observer", "target", "daylight_detector", "lectern", "trapped_chest" };
 
-    /// <summary>Verbindungs-Bits: 1 Nord, 2 Ost, 4 Süd, 8 West, 16 Mauer mit Pfosten oben.</summary>
-    public static bool Connects(int fam, int nv, int nfam, bool nOpaque)
+    /// <summary>
+    /// Verbindungs-Bits aus den Nachbarn: 1 Nord, 2 Ost, 4 Süd, 8 West, 16 oben, 32 unten.
+    /// nb/nOpq: Nachbarn in der Reihenfolge Nord, Ost, Süd, West, oben, unten (0 = Luft oder außerhalb).
+    /// </summary>
+    public static int ConnMask(int fam, int[] nb, bool[] nOpq, byte[] famOf)
     {
-        if (nv == 0) return false;
-        if (nOpaque) return true;
-        return fam switch
+        int m = 0;
+        switch (fam)
         {
-            FamFence => nfam == FamFence || IsGate(nv),
-            FamPane => nfam == FamPane || nfam == FamWall,
-            FamWall => nfam == FamWall || nfam == FamPane || IsGate(nv),
-            _ => false,
-        };
+            case FamFence: case FamPane: case FamWall:
+                for (int i = 0; i < 4; i++)
+                {
+                    int nv = nb[i], nf = nv == 0 ? 0 : famOf[nv]; if (nv == 0) continue;
+                    bool c = nOpq[i] || fam switch
+                    {
+                        FamFence => nf == FamFence || IsGate(nv),
+                        FamPane => nf == FamPane || nf == FamWall,
+                        _ => nf == FamWall || nf == FamPane || IsGate(nv),
+                    };
+                    if (c) m |= 1 << i;
+                }
+                if (fam == FamWall && m != 5 && m != 10) m |= 16;   // Pfosten, außer bei gerader Mauer
+                return m;
+            case FamVine:
+                for (int i = 0; i < 6; i++) if (nb[i] != 0 && famOf[nb[i]] != FamVine && (nOpq[i] || Blocks.Get(Blocks.BaseOf(nb[i])).Shape == 'f')) m |= 1 << i;
+                if (m == 0) m = 16;   // ohne Halt: oben, damit sie sichtbar bleibt
+                return m;
+            case FamRedstone:
+                for (int i = 0; i < 4; i++) if (RedstoneParts.Contains(K(nb[i]))) m |= 1 << i;
+                if (m is 1 or 4) m = 5; else if (m is 2 or 8) m = 10;   // einzelne Verbindung läuft wie im Spiel gerade durch
+                return m;
+            case FamMushroom: return 63;
+            case FamChorus:
+                for (int i = 0; i < 6; i++) { var k = K(nb[i]); if (k is "chorus_plant" or "chorus_flower" || (i == 5 && k == "end_stone")) m |= 1 << i; }
+                return m;
+            case FamTripwire:
+                for (int i = 0; i < 4; i++) if (K(nb[i]) is "tripwire" or "tripwire_hook") m |= 1 << i;
+                return m;
+        }
+        return 0;
     }
 
+    /// <summary>Blockzustand plus berechnete Verbindungen (nur wo die Schematic sie nicht schon enthält).</summary>
     Dictionary<string, string> Props(int v, int conn)
     {
         var pr = Blocks.Get(v).Props is { } p ? new Dictionary<string, string>(p) : new Dictionary<string, string>();
         int fam = Family(v);
-        if (fam != 0)
+        if (fam == 0) return pr;
+        string[] dn = { "north", "east", "south", "west", "up", "down" };
+        void Set(int i, string on, string off, bool force) { if (force || !pr.ContainsKey(dn[i])) pr[dn[i]] = (conn & (1 << i)) != 0 ? on : off; }
+        switch (fam)
         {
-            string[] dn = { "north", "east", "south", "west" };
-            for (int i = 0; i < 4; i++)
-                pr[dn[i]] = fam == FamWall ? ((conn & (1 << i)) != 0 ? "low" : "none") : ((conn & (1 << i)) != 0 ? "true" : "false");
-            if (fam == FamWall) pr["up"] = (conn & 16) != 0 ? "true" : "false";
+            case FamFence: case FamPane: case FamTripwire: for (int i = 0; i < 4; i++) Set(i, "true", "false", true); break;
+            case FamWall: for (int i = 0; i < 4; i++) Set(i, "low", "none", true); Set(4, "true", "false", true); break;
+            case FamVine: for (int i = 0; i < 6; i++) Set(i, "true", "false", false); break;
+            case FamRedstone: for (int i = 0; i < 4; i++) Set(i, "side", "none", false); break;
+            case FamMushroom: conn = 63; for (int i = 0; i < 6; i++) Set(i, "true", "false", false); break;   // ohne Angabe: Außenseite überall
+            case FamChorus: for (int i = 0; i < 6; i++) Set(i, "true", "false", false); break;
         }
         return pr;
+    }
+
+    /* ---------- Einfärbung wie im Spiel (Flächen mit „tintindex“) ---------- */
+    static uint? BlockTint(int v)
+    {
+        var k = K(v); var pr = Blocks.Get(v).Props;
+        string P(string n, string d) => pr != null && pr.TryGetValue(n, out var x) ? x : d;
+        switch (k)
+        {
+            case "grass_block" or "short_grass" or "tall_grass" or "fern" or "large_fern" or "potted_fern" or "sugar_cane" or "bush" or "pink_petals" or "wildflowers": return 0x91BD59;
+            case "oak_leaves" or "jungle_leaves" or "acacia_leaves" or "dark_oak_leaves" or "vine": return 0x77AB2F;
+            case "mangrove_leaves": return 0x92C162;
+            case "birch_leaves": return 0x80A755;
+            case "spruce_leaves": return 0x619961;
+            case "leaf_litter": return 0xA88A50;
+            case "lily_pad": return 0x208030;
+            case "water_cauldron": return 0x3F76E4;
+            case "attached_melon_stem" or "attached_pumpkin_stem": return 0xE0C71C;
+            case "melon_stem" or "pumpkin_stem":
+            {
+                int a = int.TryParse(P("age", "0"), out var ag) ? ag : 0;
+                return (uint)(a * 32) << 16 | (uint)(255 - a * 8) << 8 | (uint)(a * 4);
+            }
+            case "redstone_wire":
+            {
+                float f = (int.TryParse(P("power", "0"), out var pw) ? pw : 0) / 15f;
+                float r = f > 0 ? f * .6f + .4f : .3f, g = Math.Clamp(f * f * .7f - .5f, 0, 1), b = Math.Clamp(f * f * .6f - .7f, 0, 1);
+                return (uint)(r * 255) << 16 | (uint)(g * 255) << 8 | (uint)(b * 255);
+            }
+        }
+        return null;
     }
 
     static string Str(JsonNode? n) => n switch
@@ -142,7 +214,7 @@ public sealed class ModelBank
     static readonly Vector3[] DirVec = { Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ };
 
     /// <summary>Drehung der Variante: erst um x, dann um y, je in 90°-Schritten, um die Blockmitte.</summary>
-    static Vector3 RotV(Vector3 p, int rx, int ry)
+    internal static Vector3 RotV(Vector3 p, int rx, int ry)
     {
         var c = new Vector3(.5f); var d = p - c;
         for (int i = 0; i < ((rx / 90) % 4 + 4) % 4; i++) d = new Vector3(d.X, d.Z, -d.Y);   // Nord → unten
@@ -198,6 +270,7 @@ public sealed class ModelBank
                 {
                     int fi = Array.IndexOf(FaceNames, kv.Key); if (fi < 0 || kv.Value is not JsonObject fo) continue;
                     var tn = Tex(tex, Str(fo["texture"])); int tile = tn == null ? -1 : atlas.TileByName(tn);
+                    if (tile >= 0 && fo["tintindex"] != null && !McAssets.IsPretinted(tn!) && BlockTint(v) is uint tc && mc.Tinted(tn!, tc) is { } tpx) tile = atlas.TileOf(tpx);
                     if (tile < 0) continue;
                     // Ecken oben-links, oben-rechts, unten-rechts, unten-links (von außen gesehen) und Standard-UV
                     Vector3[] c; float[] uv;
@@ -233,6 +306,7 @@ public sealed class ModelBank
         }
         // Truhen und Banner haben kein Blockmodell (das Spiel zeichnet sie als Objekte)
         if (outq.Count == 0 && Entities.IsEntity(v)) outq.AddRange(Entities.Build(v, mc, atlas));
+        if (K(v) == "bell") outq.AddRange(Entities.BellBody(mc, atlas));   // Gestell aus dem Modell, Glocke als Objekt
         return outq.ToArray();
     }
 

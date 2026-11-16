@@ -97,6 +97,35 @@ public static class ModelTest
         Ok(bn.y1 > 1.7f && bn.y1 < 1.8f, $"Banner stehend: Höhe {bn.y1:0.##} Blöcke");
         var wb = Box("red_wall_banner[facing=south]", q => true);
         Ok(wb.z1 < .1f && wb.y1 <= 1.01f && wb.y0 < 0, $"Wandbanner Süd: z {wb.z0:0.##}..{wb.z1:0.##}, y {wb.y0:0.##}..{wb.y1:0.##} (an der Nordwand, hängt nach unten)");
+        // Redstone mit Stärke 15 ist hellrot, mit 0 dunkelrot
+        byte[] Px(MQuad q) => atlas.Tiles[q.Tile];
+        (int r, int g) Avg(byte[] px) { long r = 0, g = 0, n = 0; for (int i = 0; i < px.Length; i += 4) if (px[i + 3] > 100) { r += px[i]; g += px[i + 1]; n++; } return n == 0 ? (0, 0) : ((int)(r / n), (int)(g / n)); }
+        var rs15 = bank.Get(Blocks.Ensure("redstone_wire[east=none,north=none,power=15,south=none,west=none]"), 0); var rs0 = bank.Get(Blocks.Ensure("redstone_wire[east=none,north=none,power=0,south=none,west=none]"), 0);
+        (int r, int g) c15 = rs15.Length > 0 ? Avg(Px(rs15[0])) : (0, 0), c0 = rs0.Length > 0 ? Avg(Px(rs0[0])) : (0, 0);
+        Ok(c15.r > 150 && c15.r > c15.g * 2 && c0.r < c15.r, $"Redstone eingefärbt: Stärke 15 rot {c15.r}/grün {c15.g}, Stärke 0 rot {c0.r}");
+        var lv = bank.Get(Blocks.Ensure("oak_leaves[distance=7,persistent=true,waterlogged=false]"), 0);
+        (int r, int g) cl = lv.Length > 0 ? Avg(Px(lv[0])) : (0, 0); Ok(cl.g > cl.r, $"Eichenlaub grün: rot {cl.r}, grün {cl.g}");
+        // Ranke nur mit Verbindung nach Osten: liegt an der Ostkante
+        var vine = bank.Get(Blocks.Ensure("vine"), 2); float vx = vine.SelectMany(q => new[] { q.P[0], q.P[3], q.P[6], q.P[9] }).DefaultIfEmpty(-1).Min();
+        Ok(vine.Length > 0 && vx > .9f, $"Ranke an der Ostwand: x ab {vx:0.##}");
+        var mush = bank.Get(Blocks.Ensure("red_mushroom_block"), 0); int mt = atlas.TileByName("red_mushroom_block");
+        Ok(mush.Length == 6 && mush.All(q => q.Tile == mt) && mush.Select(q => q.Dir).Distinct().Count() == 6, $"Pilzblock außen rot auf allen 6 Seiten ({mush.Length} Flächen)");
+        // Shulkerkiste nach Norden: Deckel-Oberseite zeigt nach Norden
+        int lidTop = atlas.TileOf(mc.Region("shulker/shulker_red", 16, 0, 16, 16)!);
+        var sh = bank.Get(Blocks.Ensure("red_shulker_box[facing=north]"), 0).Where(q => q.Tile == lidTop).Select(q => q.Dir).ToArray();
+        Ok(sh.Length == 1 && sh[0] == 5, $"Shulkerkiste Nord: Deckel zeigt nach {string.Join(",", sh)} (erwartet 5)");
+        // Schädel: Gesicht zeigt bei Drehung 0 nach Süden, Wandschädel nach Norden an der Südwand
+        int face = atlas.TileOf(mc.Region("skeleton/skeleton", 8, 8, 8, 8)!);
+        var sk = bank.Get(Blocks.Ensure("skeleton_skull[powered=false,rotation=0]"), 0).Where(q => q.Tile == face).Select(q => q.Dir).ToArray();
+        Ok(sk.Length == 1 && sk[0] == 4, $"Schädel Drehung 0: Gesicht nach {string.Join(",", sk)} (erwartet 4)");
+        var wsk = bank.Get(Blocks.Ensure("skeleton_wall_skull[facing=north,powered=false]"), 0);
+        var wf = wsk.Where(q => q.Tile == face).Select(q => q.Dir).ToArray(); float wz0 = wsk.SelectMany(q => new[] { q.P[2], q.P[5], q.P[8], q.P[11] }).Min();
+        Ok(wf.Length == 1 && wf[0] == 5 && wz0 >= .49f, $"Wandschädel Nord: Gesicht nach {string.Join(",", wf)}, z ab {wz0:0.##}");
+        Ok(bank.Get(Blocks.Ensure("bell[attachment=floor,facing=north,powered=false]"), 0).Length > 20, "Glocke mit Körper");
+        foreach (var k in new[] { "decorated_pot[cracked=false,facing=north,waterlogged=false]", "conduit[waterlogged=true]", "copper_golem_statue[copper_golem_pose=standing,facing=north,waterlogged=false]", "end_portal", "player_head[powered=false,rotation=0]", "dragon_head[powered=false,rotation=0]", "piglin_head[powered=false,rotation=0]", "white_shulker_box[facing=up]" })
+            Ok(bank.Get(Blocks.Ensure(k), 0).Length > 0, "gezeichnet: " + k);
+        var inv = new Project { W = 2, D = 1, H = 1, Cells = new ushort[] { (ushort)Blocks.Ensure("barrier"), (ushort)Blocks.Ensure("light[level=15,waterlogged=false]") } };
+        Ok(Mesher.Build(inv, 0, atlas).Count == 0, "Barriere und Licht unsichtbar");
         Console.WriteLine(fail == 0 ? "ALLE MODELLE OK" : fail + " Fehler");
         return fail;
     }

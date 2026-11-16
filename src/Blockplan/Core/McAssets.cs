@@ -21,7 +21,24 @@ public sealed class McAssets
     public Dictionary<string, byte[]> Tex { get; } = new();          // Name → RGBA 16×16
     public Dictionary<string, Faces> Faces { get; } = new();          // Block-Key → Texturen
     public Dictionary<string, JsonNode> BlockStates { get; private set; } = new();   // blockstates/*.json
-    public Dictionary<string, (int w, int h, byte[] px)> EntityTex { get; } = new();   // textures/entity/chest|banner
+    public Dictionary<string, (int w, int h, byte[] px)> EntityTex { get; } = new();   // textures/entity/… (Objekte)
+
+    /// <summary>Objekt-Texturen, die Blockplan für Blöcke ohne Blockmodell braucht.</summary>
+    static bool EntityWanted(string n) =>
+        n.StartsWith("chest/") || n.StartsWith("banner/") || n.StartsWith("shulker/") || n.StartsWith("bell/") || n.StartsWith("decorated_pot/")
+        || n is "skeleton/skeleton" or "skeleton/wither_skeleton" or "zombie/zombie" or "creeper/creeper" or "piglin/piglin" or "player/wide/steve"
+            or "enderdragon/dragon" or "conduit/base" or "end_portal/end_portal"
+        || (n.StartsWith("copper_golem/copper_golem") && !n.Contains("eyes"));
+
+    public static bool IsPretinted(string tex) => Tints.ContainsKey(tex);
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> tinted = new();
+    /// <summary>Block-Textur in einer Farbe eingefärbt (Laub, Gras, Redstone …).</summary>
+    public byte[]? Tinted(string name, uint c) => !Tex.TryGetValue(name, out var src) ? null : tinted.GetOrAdd(name + "|" + c, _ =>
+    {
+        var px = (byte[])src.Clone();
+        for (int i = 0; i < px.Length; i += 4) { px[i] = (byte)(px[i] * ((c >> 16) & 255) / 255); px[i + 1] = (byte)(px[i + 1] * ((c >> 8) & 255) / 255); px[i + 2] = (byte)(px[i + 2] * (c & 255) / 255); }
+        return px;
+    });
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> regions = new();
 
     /// <summary>
@@ -58,13 +75,13 @@ public sealed class McAssets
     }
 
     /// <summary>Ausschnitt einer Objekt-Textur als 16×16-Kachel, optional eingefärbt (0xRRGGBB).</summary>
-    public byte[]? Region(string tex, int x, int y, int w, int h, uint tint = 0xffffff)
+    public byte[]? Region(string tex, int x, int y, int w, int h, uint tint = 0xffffff, int baseW = 64)
     {
         (int w, int h, byte[] px) t;
         lock (EntityTex) { if (!EntityTex.TryGetValue(tex, out t) || w <= 0 || h <= 0) return null; }
-        return regions.GetOrAdd($"{tex}|{x}|{y}|{w}|{h}|{tint}", _ =>
+        return regions.GetOrAdd($"{tex}|{x}|{y}|{w}|{h}|{tint}|{baseW}", _ =>
         {
-            int sc = t.w / 64; var px = new byte[T * T * 4];   // Texturen können größer als 64 px sein (Ressourcenpakete)
+            int sc = Math.Max(1, t.w / baseW); var px = new byte[T * T * 4];   // Texturen können größer als 64 px sein (Ressourcenpakete)
             for (int j = 0; j < T; j++) for (int i = 0; i < T; i++)
             {
                 int sx = Math.Clamp((x + i * w / T) * sc, 0, t.w - 1), sy = Math.Clamp((y + j * h / T) * sc, 0, t.h - 1); int so = (sy * t.w + sx) * 4, d = (j * T + i) * 4;
@@ -239,7 +256,7 @@ public sealed class McAssets
                 using var s = e.Open(); using var ms = new MemoryStream(); s.CopyTo(ms);
                 var px = Decode(ms.ToArray(), name); if (px != null) a.Tex[name] = px;
             }
-            else if (n.EndsWith(".png") && (n.StartsWith("assets/minecraft/textures/entity/chest/") || n.StartsWith("assets/minecraft/textures/entity/banner/")))
+            else if (n.EndsWith(".png") && n.StartsWith("assets/minecraft/textures/entity/") && EntityWanted(n[33..^4]))
             {   // große Objekt-Texturen (Truhen, Banner) in voller Größe
                 using var s = e.Open(); using var ms = new MemoryStream(); s.CopyTo(ms);
                 using var bm = SKBitmap.Decode(ms.ToArray());

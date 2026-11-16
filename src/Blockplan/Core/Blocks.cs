@@ -70,7 +70,7 @@ public static class Blocks
     static string NormProps(int baseIdx, string props)
     {
         var b = Get(baseIdx);
-        bool drop = (b.Shape == 'p' && !Regex.IsMatch(b.Key, "door|gate")) || dropConn.IsMatch(b.Key);
+        bool drop = b.Shape == 'p' && !Regex.IsMatch(b.Key, "door|gate");
         var parts = props.Split(',').Select(p => p.Trim())
             .Where(p => p.Length > 0 && p != "waterlogged=false" && !(drop && autoProps.IsMatch(p)))
             .OrderBy(p => p, StringComparer.Ordinal);
@@ -113,5 +113,6 @@ public static class Blocks
     static readonly Regex cutout = new("leaves|_pane$|bars$|_door$|trapdoor$|fence|ladder|rail$|vine|scaffolding|chain$|cobweb|spawner|_grate$");
     public static bool IsCutout(int v) => cutout.IsMatch(Get(BaseOf(v)).Key);
     public static bool IsWater(int v) { var k = Get(BaseOf(v)).Key; return k == "water" || k == "bubble_column"; }
+    public static bool IsLava(int v) => Get(BaseOf(v)).Key == "lava";
     public static bool IsGlassLike(int v) { var k = Get(BaseOf(v)).Key; return k.Contains("glass") || k.EndsWith("ice"); }
 }

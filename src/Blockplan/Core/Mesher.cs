@@ -87,11 +87,12 @@ public static class Mesher
         var bank = atlas.Mc != null && atlas.Mc.BlockStates.Count > 0 ? new ModelBank(atlas) : null;
         foreach (var v in p.CountBlocks(top).Keys)
         {
+            if (Entities.IsInvisible(v)) { kind[v] = 0; continue; }   // Barriere, Licht … sieht man im Spiel nicht
             var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v);
             opq[v] = k == 1 && !Entities.IsEntity(v);   // Truhen sind kleiner als ein Block: Nachbarn nicht verdecken
             if (k == 3) cr[v] = atlas.Cross(v); else ft[v] = atlas.Faces(v);
             if (k == 2) trans[v] = Blocks.IsWater(v) || IsSemi(atlas.Tiles[ft[v][0]]);
-            if (bank != null && !Blocks.IsWater(v))
+            if (bank != null && !Blocks.IsWater(v) && !Blocks.IsLava(v))
             {
                 // Echte Modelle: einfache volle Würfel bleiben zusammengefasst, alles andere als Modell
                 fam[v] = (byte)ModelBank.Family(v);
@@ -138,9 +139,10 @@ public static class Mesher
                         int conn = 0, fv = fam[v];
                         if (fv != 0)
                         {
-                            void Nb(long j, bool inb, int bit) { if (!inb) return; int nv = cells[j]; if (ModelBank.Connects(fv, nv, fam[nv], opq[nv])) conn |= bit; }
-                            Nb(i - W0, gz > 0, 1); Nb(i + 1, gx + 1 < W0, 2); Nb(i + W0, gz + 1 < D0, 4); Nb(i - 1, gx > 0, 8);
-                            if (fv == ModelBank.FamWall && conn != 5 && conn != 10) conn |= 16;
+                            // Nachbarn Nord, Ost, Süd, West, oben, unten
+                            int[] nb = { gz > 0 ? cells[i - W0] : 0, gx + 1 < W0 ? cells[i + 1] : 0, gz + 1 < D0 ? cells[i + W0] : 0, gx > 0 ? cells[i - 1] : 0, y + 1 < H ? cells[i + SY] : 0, y > 0 ? cells[i - SY] : 0 };
+                            bool[] no = new bool[6]; for (int q2 = 0; q2 < 6; q2++) no[q2] = nb[q2] != 0 && opq[nb[q2]];
+                            conn = ModelBank.ConnMask(fv, nb, no, fam);
                         }
                         var qs = bank!.Get(v, conn);
                         if (p.Banners.Count > 0 && Entities.IsBanner(v) && p.Banners.TryGetValue(i, out var pat)) qs = bank.GetBanner(v, pat);
@@ -177,7 +179,7 @@ public static class Mesher
                     bool isFull = boxes[v].Length == 1 && boxes[v][0] == Full;
                     var bxs = boxes[v];
                     // Wasseroberfläche liegt wie im Spiel etwas tiefer, wenn darüber kein Wasser ist
-                    if (isFull && Blocks.IsWater(v) && !Same(i + SY, y + 1 < H)) bxs = WaterTop;
+                    if (isFull && (Blocks.IsWater(v) || Blocks.IsLava(v)) && !Same(i + SY, y + 1 < H)) bxs = WaterTop;
                     foreach (var q in bxs)
                     {
                         float X0 = bx + q.X0, X1 = bx + q.X1, Y0 = y + q.Y0, Y1 = y + q.Y1, Z0 = bz + q.Z0, Z1 = bz + q.Z1;
