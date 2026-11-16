@@ -15,7 +15,7 @@ using Silk.NET.OpenGL;
 namespace Blockplan.Views;
 
 /// <summary>3D-Ansicht mit OpenGL. Linke Maustaste dreht, rechte verschiebt, Mausrad zoomt.</summary>
-public sealed class View3D : OpenGlControlBase
+public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTest
 {
     GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky;
     readonly List<(uint vao, uint vbo, uint ebo, int count)> meshes = new();
@@ -33,7 +33,16 @@ public sealed class View3D : OpenGlControlBase
 
     static readonly Vector3 Sky = new(0.47f, 0.65f, 1.0f);
 
-    public View3D() { Focusable = true; ClipToBounds = true; }
+    public View3D()
+    {
+        Focusable = true; ClipToBounds = true;
+        // Umschalt/Strg für schnelleres/langsameres Fliegen merken
+        AddHandler(KeyDownEvent, (_, e) => lastMods = e.KeyModifiers, Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        AddHandler(KeyUpEvent, (_, e) => lastMods = e.KeyModifiers, Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+    }
+
+    /// <summary>Die OpenGL-Fläche zeichnet selbst; ohne das bekäme sie keine Maus-Ereignisse.</summary>
+    public bool HitTest(Point point) => true;
 
     /* ---------- Daten ---------- */
     public void SetProject(Project? p, Atlas a, int topY, bool refit)
@@ -176,11 +185,37 @@ void main(){
 
     Vector3 CamPos() => target + new Vector3(MathF.Cos(yaw) * MathF.Cos(pitch), MathF.Sin(pitch), MathF.Sin(yaw) * MathF.Cos(pitch)) * dist;
 
+    /* ---------- Flugmodus: Kamera frei im Raum, wie in Minecraft im Zuschauermodus ---------- */
+    public bool Fly { get; private set; }
+    public float Speed { get; set; } = 20;              // Blöcke pro Sekunde im Flugmodus
+    public event Action<bool>? FlyChanged;
+    Vector3 eye; float lookYaw, lookPitch;
+    static Vector3 Dir(float y, float p) => new(MathF.Cos(y) * MathF.Cos(p), MathF.Sin(p), MathF.Sin(y) * MathF.Cos(p));
+    Vector3 Eye() => Fly ? eye : CamPos();
+    Vector3 Forward() => Fly ? Dir(lookYaw, lookPitch) : Vector3.Normalize(target - CamPos());
+
+    public void SetFly(bool on)
+    {
+        if (on == Fly) return;
+        if (on)
+        {
+            eye = CamPos(); var f = Vector3.Normalize(target - eye);
+            lookYaw = MathF.Atan2(f.Z, f.X); lookPitch = MathF.Asin(Math.Clamp(f.Y, -1, 1));
+        }
+        else
+        {
+            var f = Dir(lookYaw, lookPitch); target = eye + f * dist;
+            yaw = MathF.Atan2(-f.Z, -f.X); pitch = Math.Clamp(MathF.Asin(Math.Clamp(-f.Y, -1, 1)), -1.5f, 1.5f);
+        }
+        Fly = on; FlyChanged?.Invoke(on); RequestNextFrameRendering();
+    }
+
     Matrix4x4 ViewProj(float aspect)
     {
-        var cam = CamPos();
-        var view = Matrix4x4.CreateLookAt(cam, target, Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(60 * MathF.PI / 180, Math.Max(0.1f, aspect), Math.Max(0.05f, dist * 0.002f), Math.Max(4000, dist * 6));
+        var cam = Eye();
+        var view = Matrix4x4.CreateLookAt(cam, cam + Forward(), Vector3.UnitY);
+        float near = Fly ? 0.05f : Math.Max(0.05f, dist * 0.002f), far = Math.Max(5000, (Fly ? 0 : dist) * 6 + (project == null ? 0 : Math.Max(project.W, project.D) * 3));
+        var proj = Matrix4x4.CreatePerspectiveFieldOfView(70 * MathF.PI / 180, Math.Max(0.1f, aspect), near, far);
         return view * proj;
     }
 
@@ -197,11 +232,11 @@ void main(){
         gl.Enable(EnableCap.DepthTest); gl.DepthFunc(DepthFunction.Lequal); gl.Disable(EnableCap.CullFace); gl.Disable(EnableCap.Blend);
         if (meshes.Count == 0) return;
         gl.UseProgram(prog);
-        var mvp = ViewProj((float)w / h); var cam = CamPos();
+        var mvp = ViewProj((float)w / h); var cam = Eye();
         gl.UniformMatrix4(uMvp, 1, false, (float*)&mvp);
         gl.Uniform1(uCols, (float)atlasCols); gl.Uniform3(uCam, cam.X, cam.Y, cam.Z); gl.Uniform3(uSky, Sky.X, Sky.Y, Sky.Z);
         float size = project == null ? 100 : Math.Max(project.W, project.D);
-        gl.Uniform1(uFogNear, dist * 1.2f + size * 0.6f); gl.Uniform1(uFogFar, dist * 3f + size * 1.5f + 200);
+        float fd = Fly ? size * 0.5f : dist; gl.Uniform1(uFogNear, fd * 1.2f + size * 0.6f); gl.Uniform1(uFogFar, fd * 3f + size * 1.5f + 200);
         gl.ActiveTexture(TextureUnit.Texture0); gl.BindTexture(TextureTarget.Texture2D, atlasTex); gl.Uniform1(uAtlas, 0);
         gl.ActiveTexture(TextureUnit.Texture1); gl.BindTexture(TextureTarget.Texture2D, avgTex); gl.Uniform1(uAvg, 1); gl.ActiveTexture(TextureUnit.Texture0);
         foreach (var m in meshes) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
@@ -214,7 +249,7 @@ void main(){
         base.OnPointerPressed(e); Focus();
         var pp = e.GetCurrentPoint(this); dragFrom = pp.Position;
         panning = pp.Properties.IsRightButtonPressed || pp.Properties.IsMiddleButtonPressed || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        e.Pointer.Capture(this);
+        e.Pointer.Capture(this); e.Handled = true;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e) { base.OnPointerReleased(e); dragFrom = null; e.Pointer.Capture(null); }
@@ -226,9 +261,13 @@ void main(){
         if (dragFrom is { } from)
         {
             var d = pos - from; dragFrom = pos;
-            if (panning)
+            if (Fly)
+            {   // umsehen
+                lookYaw += (float)d.X * 0.005f; lookPitch = Math.Clamp(lookPitch - (float)d.Y * 0.005f, -1.55f, 1.55f);
+            }
+            else if (panning)
             {
-                var fwd = Vector3.Normalize(target - CamPos()); var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY)); var up = Vector3.Cross(right, fwd);
+                var fwd = Forward(); var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY)); var up = Vector3.Cross(right, fwd);
                 float k = dist * 0.0018f; target += (-right * (float)d.X + up * (float)d.Y) * k;
             }
             else { yaw += (float)d.X * 0.008f; pitch = Math.Clamp(pitch + (float)d.Y * 0.008f, -1.5f, 1.5f); }
@@ -240,23 +279,53 @@ void main(){
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        dist = Math.Clamp(dist * MathF.Exp(-(float)e.Delta.Y * 0.15f), 2, 6000); RequestNextFrameRendering(); e.Handled = true;
+        if (Fly) eye += Forward() * (float)e.Delta.Y * Math.Max(2, Speed * 0.25f);
+        else dist = Math.Clamp(dist * MathF.Exp(-(float)e.Delta.Y * 0.15f), 2, 6000);
+        RequestNextFrameRendering(); e.Handled = true;
     }
+
+    /* ---------- Tastatur: gehaltene Tasten bewegen weich, solange sie gedrückt sind ---------- */
+    readonly HashSet<Key> held = new();
+    DispatcherTimer? moveTimer; DateTime lastTick;
+    static readonly HashSet<Key> moveKeys = new() { Key.W, Key.A, Key.S, Key.D, Key.Space, Key.C, Key.Q, Key.E, Key.Up, Key.Down, Key.Left, Key.Right };
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        var fwd = target - CamPos(); fwd.Y = 0; if (fwd.LengthSquared() > 0) fwd = Vector3.Normalize(fwd);
-        var right = Vector3.Cross(fwd, Vector3.UnitY); float s = Math.Max(1, dist * 0.04f);
-        switch (e.Key)
-        {
-            case Key.W: target += fwd * s; break; case Key.S: target -= fwd * s; break;
-            case Key.A: target -= right * s; break; case Key.D: target += right * s; break;
-            case Key.Space: target.Y += s; break; case Key.C: target.Y -= s; break;
-            default: return;
-        }
-        RequestNextFrameRendering(); e.Handled = true;
+        if (e.Key == Key.F) { SetFly(!Fly); e.Handled = true; return; }
+        if (e.Key == Key.Escape && Fly) { SetFly(false); e.Handled = true; return; }
+        if (!moveKeys.Contains(e.Key)) return;
+        held.Add(e.Key); e.Handled = true;
+        if (moveTimer == null) { moveTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(15), DispatcherPriority.Render, (_, _) => Step()); }
+        if (!moveTimer.IsEnabled) { lastTick = DateTime.Now; moveTimer.Start(); Step(); }
     }
+
+    protected override void OnKeyUp(KeyEventArgs e) { base.OnKeyUp(e); held.Remove(e.Key); }
+    protected override void OnLostFocus(FocusChangedEventArgs e) { base.OnLostFocus(e); held.Clear(); }
+
+    void Step()
+    {
+        var now = DateTime.Now; float dt = (float)Math.Clamp((now - lastTick).TotalSeconds, 0.001, 0.1); lastTick = now;
+        if (held.Count == 0) { moveTimer?.Stop(); return; }
+        float sp = (Fly ? Speed : Math.Max(Speed, dist * 0.8f)) * dt;
+        var mods = lastMods;
+        if (mods.HasFlag(KeyModifiers.Shift)) sp *= 4; if (mods.HasFlag(KeyModifiers.Control)) sp *= 0.25f;
+        var f = Forward(); var flat = new Vector3(f.X, 0, f.Z); if (flat.LengthSquared() < 1e-6f) flat = Dir(Fly ? lookYaw : yaw + MathF.PI, 0); flat = Vector3.Normalize(flat);
+        var right = Vector3.Normalize(Vector3.Cross(flat, Vector3.UnitY));
+        var mv = Vector3.Zero;
+        if (held.Contains(Key.W) || held.Contains(Key.Up)) mv += Fly ? f : flat;
+        if (held.Contains(Key.S) || held.Contains(Key.Down)) mv -= Fly ? f : flat;
+        if (held.Contains(Key.D) || held.Contains(Key.Right)) mv += right;
+        if (held.Contains(Key.A) || held.Contains(Key.Left)) mv -= right;
+        if (held.Contains(Key.Space) || held.Contains(Key.E)) mv += Vector3.UnitY;
+        if (held.Contains(Key.C) || held.Contains(Key.Q)) mv -= Vector3.UnitY;
+        if (mv == Vector3.Zero) return;
+        mv *= sp;
+        if (Fly) eye += mv; else target += mv;
+        RequestNextFrameRendering();
+    }
+
+    KeyModifiers lastMods;
 
     /// <summary>Block unter der Maus: Strahl durch das Raster laufen lassen.</summary>
     void Pick(Point pos)

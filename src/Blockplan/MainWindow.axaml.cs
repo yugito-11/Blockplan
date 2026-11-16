@@ -53,6 +53,10 @@ public partial class MainWindow : Window
         foreach (var n in new[] { OrX, OrY, OrZ }) n.ValueChanged += (_, _) => { if (project == null || loadingUi) return; project.OriginX = (int)(OrX.Value ?? 0); project.OriginY = (int)(OrY.Value ?? 64); project.OriginZ = (int)(OrZ.Value ?? 0); SaveProject(); };
         MatSearch.TextChanged += (_, _) => FilterMat();
         Plan.Hover += ShowHover; View3.Hover += ShowHover;
+        FlyBtn.Click += (_, _) => { View3.SetFly(FlyBtn.IsChecked == true); View3.Focus(); };
+        View3.FlyChanged += on => { FlyBtn.IsChecked = on; ShowTab(1); };
+        SpeedSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { View3.Speed = (float)SpeedSlider.Value; SpeedVal.Text = $"{SpeedSlider.Value:0} Blöcke/s"; } };
+        SpeedVal.Text = "20 Blöcke/s";
         View3.Status += s => { StatusText.Text = s; StatusBox.IsVisible = s.Length > 0 && View3.IsVisible; };
         AddHandler(DragDrop.DropEvent, OnDrop); DragDrop.SetAllowDrop(this, true);
         KeyDown += (_, e) =>
@@ -71,12 +75,15 @@ public partial class MainWindow : Window
     {
         Nav2D.IsChecked = t == 0; Nav3D.IsChecked = t == 1; NavMat.IsChecked = t == 2;
         Plan.IsVisible = t == 0; View3.IsVisible = t == 1; MatPage.IsVisible = t == 2; HoverBox.IsVisible = false;
+        Bar3D.IsVisible = t == 1; if (t == 1) Dispatcher.UIThread.Post(() => View3.Focus());
         StatusBox.IsVisible = t == 1 && StatusText.Text?.Length > 0;
         ModeRow.IsVisible = t == 0; LayerRow.IsVisible = t == 0 && ModeLayer.IsChecked == true;
         ViewHint.Text = t switch
         {
             0 => "Ziehen = verschieben · Mausrad = zoomen · Bild auf/ab = Schicht wechseln",
-            1 => "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen",
+            1 => View3.Fly
+                ? "Flugmodus: WASD = fliegen · Leertaste/C = hoch/runter · Maus ziehen = umsehen · Umschalt = schneller · F oder Esc = beenden"
+                : "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen · F = Flugmodus",
             _ => "Alle Blöcke bis zur eingestellten Höhe, sortiert nach Menge.",
         };
         if (t == 2) BuildMaterials();
