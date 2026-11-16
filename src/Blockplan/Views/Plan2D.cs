@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -155,23 +156,135 @@ public sealed class Plan2D : Control
             for (int z = z0; z <= z1; z++) { double Z = Math.Round(off.Y + z * scale) + .5; ctx.DrawLine((p.OriginZ + z) % 16 == 0 ? chunk : thin, new Point(Math.Max(0, off.X), Z), new Point(Math.Min(Bounds.Width, off.X + p.W * scale), Z)); }
         }
         ctx.DrawRectangle(new Pen(new SolidColorBrush(Color.FromRgb(0xec, 0x5f, 0x9b)), 1.5), area);
+        DrawOverlays(ctx);
         // Norden-Pfeil
         var ft = new FormattedText("N ▲", System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface("Inter", FontStyle.Normal, FontWeight.Bold), 12, Brushes.White);
         ctx.DrawText(ft, new Point(Bounds.Width / 2 - ft.Width / 2, 8));
     }
 
-    protected override void OnPointerPressed(PointerPressedEventArgs e) { base.OnPointerPressed(e); Focus(); dragFrom = e.GetPosition(this); e.Pointer.Capture(this); }
-    protected override void OnPointerReleased(PointerReleasedEventArgs e) { base.OnPointerReleased(e); dragFrom = null; e.Pointer.Capture(null); }
+    /* ---------- Planungs-Ebenen: Baupläne, Hilfslinien, Punkte, Messung, Auswahl ---------- */
+    public PlanData? Plan { get; set; }
+    public bool ShowParts { get; set; } = true;
+    public string? HighlightPart { get; set; }
+    /// <summary>"" = verschieben, "point" = Punkt setzen, "area" = Bereich für Bauplan ziehen</summary>
+    public string Mode { get; set; } = "";
+    public event Action<int, int>? PointPlaced;
+    public event Action<int, int, int, int>? AreaSelected;
+    public event Action<string>? MeasureChanged;
+    (int x0, int z0, int x1, int z1)? meas, area;
+    bool measuring, selecting;
+
+    Point S(double x, double z) => new(off.X + x * scale, off.Y + z * scale);
+    static IBrush Br(string hex, double a = 1) { try { var c = Color.Parse(hex); return new SolidColorBrush(c, a); } catch { return new SolidColorBrush(Colors.White, a); } }
+
+    void Tag(DrawingContext ctx, string text, Point at, IBrush border)
+    {
+        var t = new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Inter", FontStyle.Normal, FontWeight.SemiBold), 11.5, Brushes.White);
+        var r = new Rect(at.X - t.Width / 2 - 5, at.Y - t.Height / 2 - 2, t.Width + 10, t.Height + 4);
+        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(230, 12, 18, 14)), r, 4); ctx.DrawRectangle(new Pen(border, 1), r, 4);
+        ctx.DrawText(t, new Point(r.X + 5, r.Y + 2));
+    }
+
+    void DrawOverlays(DrawingContext ctx)
+    {
+        if (p == null) return;
+        var pl = Plan;
+        if (pl != null && ShowParts)
+            foreach (var t in pl.Parts.Where(t => !t.Base))
+            {
+                var b = t.Box; if (!LayerMode && b[1] > top) continue; if (LayerMode && (layer < b[1] || layer > b[4])) continue;
+                bool hi = t.Id == HighlightPart; var col = hi ? Br("#ffd23a") : Br("#ec5f9b", .8);
+                var r = new Rect(S(b[0], b[2]), S(b[3] + 1, b[5] + 1));
+                if (hi) ctx.FillRectangle(Br("#ffd23a", .18), r);
+                ctx.DrawRectangle(new Pen(col, hi ? 2.5 : 1.2, hi ? null : new DashStyle(new double[] { 4, 3 }, 0)), r);
+                if (r.Width > 60 || hi) Tag(ctx, pl.Label(t), r.Center, col);
+            }
+        if (pl != null)
+        {
+            foreach (var g in pl.Guides.Where(g => g.On))
+            {
+                var col = Br(g.Color); var pen = new Pen(col, 1.8);
+                if (scale >= 4) foreach (var (x, z) in g.Cells()) ctx.FillRectangle(Br(g.Color, .55), new Rect(S(x, z), new Size(scale, scale)));
+                if (g.Type == "line")
+                {
+                    ctx.DrawLine(pen, S(g.Cx + .5, g.Cz + .5), S(g.X2 + .5, g.Z2 + .5));
+                    int n = (int)Math.Round(Math.Sqrt((g.X2 - g.Cx) * (g.X2 - g.Cx) + (g.Z2 - g.Cz) * (g.Z2 - g.Cz))) + 1;
+                    Tag(ctx, $"{n} Blöcke", S((g.Cx + g.X2) / 2 + .5, (g.Cz + g.Z2) / 2 + .5), col); continue;
+                }
+                double a = g.A, b = g.Type == "circle" ? g.A : g.Bv;
+                if (g.Type == "rect") ctx.DrawRectangle(pen, new Rect(S(g.Cx - a / 2, g.Cz - b / 2), S(g.Cx + a / 2, g.Cz + b / 2)));
+                else ctx.DrawEllipse(null, pen, S(g.Cx + .5, g.Cz + .5), a / 2 * scale, b / 2 * scale);
+                var dash = new Pen(col, 1, new DashStyle(new double[] { 5, 4 }, 0));
+                ctx.DrawLine(dash, S(g.Cx - a / 2 + .5, g.Cz + .5), S(g.Cx + a / 2 + .5, g.Cz + .5)); ctx.DrawLine(dash, S(g.Cx + .5, g.Cz - b / 2 + .5), S(g.Cx + .5, g.Cz + b / 2 + .5));
+                ctx.FillRectangle(col, new Rect(S(g.Cx + .5, g.Cz + .5) - new Point(3, 3), new Size(6, 6)));
+                if (a * scale > 50) Tag(ctx, g.Type == "rect" ? $"{a:0} Blöcke" : $"Ø {a:0} · r {a / 2:0.#}", S(g.Cx + .5, g.Cz + .5) + new Point(0, -14), col);
+                if (b * scale > 50 && g.Type != "circle") Tag(ctx, g.Type == "rect" ? $"{b:0} Blöcke" : $"Ø {b:0} · r {b / 2:0.#}", S(g.Cx + .5, g.Cz + b / 4 + .5) + new Point(42, 0), col);
+                if (g.Name.Length > 0 && a * scale > 40) Tag(ctx, g.Name, S(g.Cx + .5, g.Cz - b / 2 + .5) + new Point(0, -14), col);
+            }
+            foreach (var q in pl.Points)
+            {
+                var c = S(q.X + .5, q.Z + .5); ctx.DrawEllipse(Br("#ffd23a"), new Pen(Brushes.Black, 1.5), c, 6, 6);
+                Tag(ctx, $"{q.Name} ({p.OriginX + q.X} | {p.OriginZ + q.Z})", c + new Point(0, -18), Br("#ffd23a"));
+            }
+        }
+        if (meas is { } m)
+        {
+            var a = S(m.x0 + .5, m.z0 + .5); var b = S(m.x1 + .5, m.z1 + .5); var col = Br("#ff8fbf");
+            ctx.FillRectangle(Br("#ff8fbf", .5), new Rect(S(m.x0, m.z0), new Size(scale, scale))); ctx.FillRectangle(Br("#ff8fbf", .5), new Rect(S(m.x1, m.z1), new Size(scale, scale)));
+            ctx.DrawLine(new Pen(col, 2.5), a, b);
+            Tag(ctx, MeasureText(m), new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2 - 14), col);
+        }
+        if (area is { } ar)
+        {
+            var r = new Rect(S(Math.Min(ar.x0, ar.x1), Math.Min(ar.z0, ar.z1)), S(Math.Max(ar.x0, ar.x1) + 1, Math.Max(ar.z0, ar.z1) + 1));
+            ctx.FillRectangle(Br("#ffd23a", .15), r); ctx.DrawRectangle(new Pen(Br("#ffd23a"), 2, new DashStyle(new double[] { 6, 4 }, 0)), r);
+            Tag(ctx, $"{(int)Math.Round(r.Width / scale)} × {(int)Math.Round(r.Height / scale)}", r.Center, Br("#ffd23a"));
+        }
+    }
+
+    static string MeasureText((int x0, int z0, int x1, int z1) m)
+    {
+        int dx = Math.Abs(m.x1 - m.x0) + 1, dz = Math.Abs(m.z1 - m.z0) + 1;
+        int n = (int)Math.Round(Math.Sqrt((m.x1 - m.x0) * (m.x1 - m.x0) + (m.z1 - m.z0) * (m.z1 - m.z0))) + 1;
+        return dx == 1 || dz == 1 ? $"{n} Blöcke" : $"{n} Blöcke  ({dx} × {dz})";
+    }
+
+    (int x, int z) CellAt(Point pos) => ((int)Math.Floor((pos.X - off.X) / scale), (int)Math.Floor((pos.Y - off.Y) / scale));
+    public void ClearMeasure() { meas = null; MeasureChanged?.Invoke(""); InvalidateVisual(); }
+    public void CenterOn(double x, double z) { off = new Point(Bounds.Width / 2 - (x + .5) * scale, Bounds.Height / 2 - (z + .5) * scale); if (scale < 8) { var c = new Point(Bounds.Width / 2, Bounds.Height / 2); off = c - (c - off) * (8 / scale); scale = 8; } InvalidateVisual(); }
+    public (double x, double z) ViewCenter() => ((Bounds.Width / 2 - off.X) / scale, (Bounds.Height / 2 - off.Y) / scale);
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e); Focus(); var pos = e.GetPosition(this); var pp = e.GetCurrentPoint(this);
+        var (x, z) = CellAt(pos);
+        if (pp.Properties.IsRightButtonPressed)
+        {   // Messen mit rechter Maustaste
+            meas = (x, z, x, z); measuring = true; e.Pointer.Capture(this); InvalidateVisual(); return;
+        }
+        if (Mode == "point" && p != null && x >= 0 && z >= 0 && x < p.W && z < p.D) { PointPlaced?.Invoke(x, z); return; }
+        if (Mode == "area") { area = (x, z, x, z); selecting = true; e.Pointer.Capture(this); InvalidateVisual(); return; }
+        dragFrom = pos; e.Pointer.Capture(this);
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e); dragFrom = null; e.Pointer.Capture(null);
+        if (measuring) { measuring = false; if (meas is { } m) MeasureChanged?.Invoke(MeasureText(m) + $"  ·  von X {p!.OriginX + m.x0} Z {p.OriginZ + m.z0} bis X {p.OriginX + m.x1} Z {p.OriginZ + m.z1}"); }
+        if (selecting && area is { } a) { selecting = false; area = null; InvalidateVisual(); AreaSelected?.Invoke(Math.Min(a.x0, a.x1), Math.Min(a.z0, a.z1), Math.Max(a.x0, a.x1), Math.Max(a.z0, a.z1)); }
+    }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e); var pos = e.GetPosition(this);
+        if (measuring && meas is { } m) { var (x, z) = CellAt(pos); meas = (m.x0, m.z0, x, z); InvalidateVisual(); return; }
+        if (selecting && area is { } a) { var (x, z) = CellAt(pos); area = (a.x0, a.z0, x, z); InvalidateVisual(); return; }
         if (dragFrom is { } f) { off += pos - f; dragFrom = pos; InvalidateVisual(); return; }
         if (p == null || topV == null) return;
-        int x = (int)Math.Floor((pos.X - off.X) / scale), z = (int)Math.Floor((pos.Y - off.Y) / scale);
-        if (x < 0 || z < 0 || x >= p.W || z >= p.D) { Hover?.Invoke(""); return; }
-        long c = (long)z * p.W + x; int v = topV[c];
-        Hover?.Invoke(v == 0 ? $"leer  ·  X {p.OriginX + x}  Z {p.OriginZ + z}" : $"{Blocks.DisplayName(v, true)}  ·  X {p.OriginX + x}  Y {p.OriginY + topY![c]}  Z {p.OriginZ + z}");
+        int cx = (int)Math.Floor((pos.X - off.X) / scale), cz = (int)Math.Floor((pos.Y - off.Y) / scale);
+        if (cx < 0 || cz < 0 || cx >= p.W || cz >= p.D) { Hover?.Invoke(""); return; }
+        long c = (long)cz * p.W + cx; int v = topV[c];
+        Hover?.Invoke(v == 0 ? $"leer  ·  X {p.OriginX + cx}  Z {p.OriginZ + cz}" : $"{Blocks.DisplayName(v, true)}  ·  X {p.OriginX + cx}  Y {p.OriginY + topY![c]}  Z {p.OriginZ + cz}");
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)

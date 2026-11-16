@@ -7,6 +7,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
@@ -71,28 +72,216 @@ public partial class MainWindow : Window
             if (e.Key == Avalonia.Input.Key.PageUp) LayerSlider.Value = Math.Min(LayerSlider.Maximum, LayerSlider.Value + 1);
             if (e.Key == Avalonia.Input.Key.PageDown) LayerSlider.Value = Math.Max(0, LayerSlider.Value - 1);
         };
+        InitPlanning();
         Opened += async (_, _) => await Startup();
         Closing += (_, _) => store.Dispose();
     }
 
     void ShowHover(string s) { HoverText.Text = s; HoverBox.IsVisible = s.Length > 0; }
 
+    int tab;
     void ShowTab(int t)
     {
-        Nav2D.IsChecked = t == 0; Nav3D.IsChecked = t == 1; NavMat.IsChecked = t == 2;
-        Plan.IsVisible = t == 0; View3.IsVisible = t == 1; MatPage.IsVisible = t == 2; HoverBox.IsVisible = false;
+        tab = t;
+        Nav2D.IsChecked = t == 0; Nav3D.IsChecked = t == 1; NavMat.IsChecked = t == 2; NavParts.IsChecked = t == 3; NavStages.IsChecked = t == 4; NavTodos.IsChecked = t == 5;
+        Plan.IsVisible = t == 0; View3.IsVisible = t == 1; MatPage.IsVisible = t == 2; PartsHost.IsVisible = t == 3; StagesHost.IsVisible = t == 4; TodosHost.IsVisible = t == 5;
+        HoverBox.IsVisible = false; MeasureBox.IsVisible = t == 0 && MeasureText.Text?.Length > 0;
         Bar3D.IsVisible = t == 1; if (t == 1) Dispatcher.UIThread.Post(() => View3.Focus());
         StatusBox.IsVisible = t == 1 && StatusText.Text?.Length > 0;
         ModeRow.IsVisible = t == 0; LayerRow.IsVisible = t == 0 && ModeLayer.IsChecked == true;
+        ToolsCard.IsVisible = GuidesCard.IsVisible = t == 0;
         ViewHint.Text = t switch
         {
-            0 => "Ziehen = verschieben · Mausrad = zoomen · Bild auf/ab = Schicht wechseln",
+            0 => "Ziehen = verschieben · Mausrad = zoomen · rechte Maustaste ziehen = messen · Bild auf/ab = Schicht wechseln",
             1 => View3.Fly
                 ? "Flugmodus: WASD = fliegen · Leertaste/C = hoch/runter · Maus ziehen = umsehen · Umschalt = schneller · F oder Esc = beenden"
                 : "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen · F = Flugmodus",
-            _ => "Alle Blöcke bis zur eingestellten Höhe, sortiert nach Menge.",
+            2 => "Alle Blöcke bis zur eingestellten Höhe, sortiert nach Menge.",
+            3 => "Baupläne sind Teile deines Baus. Neue erstellst du im 2D-Plan mit „Bauplan aus Bereich“.",
+            4 => "Etappen fassen Baupläne zu Bauabschnitten zusammen, mit Material je Abschnitt.",
+            _ => "Aufgaben fürs Team, auf Wunsch mit Bezug zu einer Etappe oder einem Bauplan.",
         };
         if (t == 2) BuildMaterials();
+        if (t == 3) partsPage.Refresh(); if (t == 4) stagesPage.Refresh(); if (t == 5) todosPage.Refresh();
+    }
+
+    /* ---------- Baupläne, Etappen, To-dos, Werkzeuge, Hilfslinien ---------- */
+    PlanData? plan;
+    PartsPage partsPage = null!; StagesPage stagesPage = null!; TodosPage todosPage = null!;
+    DispatcherTimer? saveTimer;
+
+    /// <summary>Speichern gesammelt nach kurzer Pause (große Projekte brauchen dafür etwas Zeit).</summary>
+    void ScheduleSave()
+    {
+        UpdateCounts();
+        saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, (_, _) => { saveTimer!.Stop(); SaveProject(); });
+        saveTimer.Stop(); saveTimer.Start();
+    }
+
+    void UpdateCounts()
+    {
+        var ss = plan?.Stages ?? new(); var td = plan?.Todos ?? new();
+        NavStages.Content = ss.Count > 0 ? $"⟋  Etappen  ({ss.Count(x => x.Done)}/{ss.Count})" : "⟋  Etappen";
+        int open = td.Count(x => !x.Done); NavTodos.Content = open > 0 ? $"✓  Team-To-dos  ({open})" : "✓  Team-To-dos";
+        int np = plan?.Parts.Count(x => !x.Base) ?? 0; NavParts.Content = np > 0 ? $"◫  Baupläne  ({np})" : "◫  Baupläne";
+    }
+
+    void InitPlanning()
+    {
+        (Project?, PlanData?, Atlas) Ctx() => (project, plan, atlas);
+        partsPage = new PartsPage(Ctx, ScheduleSave, ShowPartInPlan); PartsHost.Content = partsPage;
+        stagesPage = new StagesPage(Ctx, ScheduleSave); StagesHost.Content = stagesPage;
+        todosPage = new TodosPage(Ctx, ScheduleSave, () => store.Get("who") ?? "", n => store.Set("who", n), OpenRef); TodosHost.Content = todosPage;
+        NavParts.Click += (_, _) => ShowTab(3); NavStages.Click += (_, _) => ShowTab(4); NavTodos.Click += (_, _) => ShowTab(5);
+        ToolArea.Click += (_, _) => { ToolPoint.IsChecked = false; Plan.Mode = ToolArea.IsChecked == true ? "area" : ""; ViewHint.Text = Plan.Mode == "area" ? "Ziehe im Plan einen Rahmen um den Teil, der ein Bauplan werden soll." : ViewHint.Text; };
+        ToolPoint.Click += (_, _) => { ToolArea.IsChecked = false; Plan.Mode = ToolPoint.IsChecked == true ? "point" : ""; ViewHint.Text = Plan.Mode == "point" ? "Klicke im Plan auf die Stelle für den Punkt." : ViewHint.Text; };
+        ShowPartsChk.IsCheckedChanged += (_, _) => { Plan.ShowParts = ShowPartsChk.IsChecked == true; Plan.InvalidateVisual(); };
+        Plan.MeasureChanged += t => { MeasureText.Text = t; MeasureBox.IsVisible = t.Length > 0 && tab == 0; };
+        BtnMeasureClear.Click += (_, _) => Plan.ClearMeasure();
+        Plan.PointPlaced += async (x, z) =>
+        {
+            if (plan == null) return;
+            var name = await Ask("Punkt setzen", "Name des Punkts", $"Punkt {plan.Points.Count + 1}");
+            ToolPoint.IsChecked = false; Plan.Mode = "";
+            if (name == null) return;
+            plan.AddPoint(name, x, z); ScheduleSave(); RenderPoints(); Plan.InvalidateVisual();
+        };
+        Plan.AreaSelected += async (x0, z0, x1, z1) => { ToolArea.IsChecked = false; Plan.Mode = ""; await CreatePart(x0, z0, x1, z1); };
+        GAddEllipse.Click += (_, _) => AddGuide("ellipse"); GAddCircle.Click += (_, _) => AddGuide("circle");
+        GAddRect.Click += (_, _) => AddGuide("rect"); GAddLine.Click += (_, _) => AddGuide("line");
+    }
+
+    void ShowPartInPlan(Part t)
+    {
+        var b = t.Box; Plan.HighlightPart = t.Id; ShowTab(0);
+        Dispatcher.UIThread.Post(() => Plan.CenterOn((b[0] + b[3]) / 2.0, (b[2] + b[5]) / 2.0));
+    }
+
+    void OpenRef(string r)
+    {
+        var k = r.Split(':', 2); if (k.Length < 2) return;
+        if (k[0] == "s") { stagesPage.Selected = k[1]; ShowTab(4); } else { partsPage.Selected = k[1]; ShowTab(3); }
+    }
+
+    void RenderPoints()
+    {
+        PointsList.Children.Clear();
+        var ps = plan?.Points ?? new();
+        if (ps.Count == 0) { PointsList.Children.Add(new TextBlock { Text = "Noch keine Punkte.", Classes = { "note" } }); return; }
+        foreach (var q in ps)
+        {
+            var row = new DockPanel();
+            var del = new Button { Content = "×", Padding = new Thickness(6, 0) }; DockPanel.SetDock(del, Dock.Right);
+            del.Click += (_, _) => { plan!.Remove("points", q); ScheduleSave(); RenderPoints(); Plan.InvalidateVisual(); };
+            var go = new Button { Content = $"{q.Name}  ·  X {project!.OriginX + q.X} Z {project.OriginZ + q.Z}", Background = Brushes.Transparent, HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Left };
+            go.Click += (_, _) => Plan.CenterOn(q.X, q.Z);
+            row.Children.Add(del); row.Children.Add(go); PointsList.Children.Add(row);
+        }
+    }
+
+    void AddGuide(string type)
+    {
+        if (plan == null || project == null) return;
+        var (cx, cz) = Plan.ViewCenter();
+        plan.AddGuide(type, Math.Clamp(cx, 0, project.W), Math.Clamp(cz, 0, project.D), type == "line" ? 20 : 31);
+        ScheduleSave(); RenderGuides(); Plan.InvalidateVisual();
+    }
+
+    void RenderGuides()
+    {
+        GuidesList.Children.Clear();
+        if (plan == null || project == null) return;
+        int ox = project.OriginX, oz = project.OriginZ;
+        var colors = new[] { "#7ee08f", "#ffd23a", "#5ab4ff", "#ff6b9a", "#c08bff", "#ff9f43" };
+        foreach (var g in plan.Guides)
+        {
+            var box = new StackPanel { Spacing = 6 };
+            var name = new TextBox { Text = g.Name, MinWidth = 0 };
+            name.LostFocus += (_, _) => { g.Name = name.Text ?? ""; ScheduleSave(); Plan.InvalidateVisual(); };
+            var on = new CheckBox { IsChecked = g.On }; on.IsCheckedChanged += (_, _) => { g.On = on.IsChecked == true; ScheduleSave(); Plan.InvalidateVisual(); };
+            var del = new Button { Content = "×", Padding = new Thickness(6, 0) }; del.Click += (_, _) => { plan.Remove("guides", g); ScheduleSave(); RenderGuides(); Plan.InvalidateVisual(); };
+            var col = new ComboBox { ItemsSource = colors.Select(c => new Border { Width = 18, Height = 14, CornerRadius = new CornerRadius(3), Background = new SolidColorBrush(Color.Parse(c)) }).ToList(), SelectedIndex = Math.Max(0, Array.IndexOf(colors, g.Color)), Width = 64 };
+            col.SelectionChanged += (_, _) => { if (col.SelectedIndex >= 0) { g.Color = colors[col.SelectedIndex]; ScheduleSave(); Plan.InvalidateVisual(); } };
+            var head = new DockPanel(); DockPanel.SetDock(on, Dock.Left); DockPanel.SetDock(col, Dock.Left); DockPanel.SetDock(del, Dock.Right);
+            head.Children.Add(on); head.Children.Add(col); head.Children.Add(del); head.Children.Add(name);
+            box.Children.Add(head);
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,8,*") };
+            int row = 0;
+            void F(string label, double val, Action<double> set, int column)
+            {
+                if (column == 0) grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                var sp = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 0, 4) };
+                sp.Children.Add(new TextBlock { Text = label, Classes = { "note" } });
+                var n = new NumericUpDown { Value = (decimal)Math.Round(val, 1), FormatString = "0.#", ShowButtonSpinner = false };
+                n.ValueChanged += (_, _) => { if (n.Value is { } v) { set((double)v); ScheduleSave(); Plan.InvalidateVisual(); } };
+                sp.Children.Add(n); Grid.SetColumn(sp, column * 2); Grid.SetRow(sp, row); grid.Children.Add(sp);
+                if (column == 1) row++;
+            }
+            if (g.Type == "line")
+            {
+                F("Start X", ox + g.Cx, v => g.Cx = v - ox, 0); F("Start Z", oz + g.Cz, v => g.Cz = v - oz, 1);
+                F("Ende X", ox + g.X2, v => g.X2 = v - ox, 0); F("Ende Z", oz + g.Z2, v => g.Z2 = v - oz, 1);
+            }
+            else
+            {
+                F("Mitte X", ox + g.Cx, v => g.Cx = v - ox, 0); F("Mitte Z", oz + g.Cz, v => g.Cz = v - oz, 1);
+                if (g.Type == "circle") { F("Durchmesser", g.A, v => g.A = Math.Max(1, v), 0); row++; }
+                else { F(g.Type == "rect" ? "Breite (X)" : "Länge (X)", g.A, v => g.A = Math.Max(1, v), 0); F(g.Type == "rect" ? "Tiefe (Z)" : "Breite (Z)", g.Bv, v => g.Bv = Math.Max(1, v), 1); }
+            }
+            box.Children.Add(grid);
+            GuidesList.Children.Add(new Border { BorderBrush = UI.Res("LineBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Child = box });
+        }
+        if (plan.Guides.Count == 0) GuidesList.Children.Add(new TextBlock { Text = "Noch keine Hilfslinien. Sie erscheinen in der Mitte der Ansicht.", Classes = { "note" }, TextWrapping = TextWrapping.Wrap });
+    }
+
+    async Task CreatePart(int x0, int z0, int x1, int z1)
+    {
+        if (plan == null || project == null) return;
+        var cats = plan.Cats.Where(c => !c.Base).ToList();
+        var w = new Window { Title = "Bauplan erstellen", Width = 440, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var name = new TextBox { Text = "" , PlaceholderText = "Name, z. B. „Nordturm“" };
+        var cat = new ComboBox { ItemsSource = cats.Select(c => c.Name).Append("Neue Kategorie …").ToList(), SelectedIndex = cats.Count > 0 ? 0 : cats.Count, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+        var newCat = new TextBox { PlaceholderText = "Name der neuen Kategorie", IsVisible = cats.Count == 0, Text = cats.Count == 0 ? "Bauteile" : "" };
+        cat.SelectionChanged += (_, _) => newCat.IsVisible = cat.SelectedIndex == cats.Count;
+        int cut = (int)CutSlider.Value;
+        var y0 = new NumericUpDown { Value = project.OriginY, Minimum = project.OriginY, Maximum = project.OriginY + project.H - 1, FormatString = "0" };
+        var y1 = new NumericUpDown { Value = project.OriginY + cut, Minimum = project.OriginY, Maximum = project.OriginY + project.H - 1, FormatString = "0" };
+        var ok = new Button { Content = "Erstellen", Classes = { "accent" }, MinWidth = 90 }; var cancel = new Button { Content = "Abbrechen", MinWidth = 90 };
+        bool go = false; ok.Click += (_, _) => { go = true; w.Close(); }; cancel.Click += (_, _) => w.Close();
+        w.Content = new StackPanel
+        {
+            Margin = new Thickness(22), Spacing = 10, Children =
+            {
+                new TextBlock { Text = "Bauplan erstellen", FontSize = 17, FontWeight = FontWeight.SemiBold },
+                new TextBlock { Text = $"Bereich {x1 - x0 + 1}×{z1 - z0 + 1} ab X {project.OriginX + x0} Z {project.OriginZ + z0}. Es zählen nur Felder mit Blöcken.", Classes = { "note" }, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = "Name", Classes = { "note" } }, name,
+                new TextBlock { Text = "Kategorie", Classes = { "note" } }, cat, newCat,
+                new TextBlock { Text = "Höhe von Y bis Y", Classes = { "note" } },
+                new Grid { ColumnDefinitions = new ColumnDefinitions("*,8,*"), Children = { y0, new Border { [Grid.ColumnProperty] = 2, Child = y1 } } },
+                new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Children = { cancel, ok } },
+            }
+        };
+        await w.ShowDialog(this);
+        if (!go) return;
+        string catId = cat.SelectedIndex >= 0 && cat.SelectedIndex < cats.Count ? cats[cat.SelectedIndex].Id : plan.AddCat(string.IsNullOrWhiteSpace(newCat.Text) ? "Bauteile" : newCat.Text.Trim()).Id;
+        int ya = (int)(y0.Value ?? project.OriginY) - project.OriginY, yb = (int)(y1.Value ?? project.OriginY) - project.OriginY;
+        var part = plan.AddPart(catId, name.Text?.Trim() ?? "", x0, Math.Min(ya, yb), z0, x1, Math.Max(ya, yb), z1);
+        if (part == null) { await Message("Kein Bauplan erstellt", "In diesem Bereich sind keine Blöcke."); return; }
+        ScheduleSave(); Plan.HighlightPart = part.Id; Plan.InvalidateVisual();
+        partsPage.Selected = part.Id;
+    }
+
+    async Task<string?> Ask(string title, string label, string value)
+    {
+        var w = new Window { Title = title, Width = 380, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var tb = new TextBox { Text = value }; string? res = null;
+        var ok = new Button { Content = "OK", Classes = { "accent" }, MinWidth = 80 }; var cancel = new Button { Content = "Abbrechen", MinWidth = 80 };
+        ok.Click += (_, _) => { res = tb.Text?.Trim(); w.Close(); }; cancel.Click += (_, _) => w.Close();
+        tb.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { res = tb.Text?.Trim(); w.Close(); } };
+        w.Content = new StackPanel { Margin = new Thickness(20), Spacing = 10, Children = { new TextBlock { Text = label }, tb, new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Children = { cancel, ok } } } };
+        w.Opened += (_, _) => { tb.Focus(); tb.SelectAll(); };
+        await w.ShowDialog(this);
+        return string.IsNullOrEmpty(res) ? null : res;
     }
 
     void Busy(string? text) { BusyBox.IsVisible = text != null; if (text != null) BusyText.Text = text; }
@@ -109,7 +298,7 @@ public partial class MainWindow : Window
         if (Environment.GetEnvironmentVariable("BLOCKPLAN_OPEN") is { Length: > 0 } want) id = list.FirstOrDefault(p => p.Name.StartsWith(want, StringComparison.OrdinalIgnoreCase))?.Id ?? id;
         if (id != null) await OpenProject(id);
         else ShowEmpty();
-        switch (Environment.GetEnvironmentVariable("BLOCKPLAN_TAB")) { case "3d": ShowTab(1); break; case "mat": ShowTab(2); break; case "layer": ModeLayer.IsChecked = true; ShowTab(0); break; }
+        switch (Environment.GetEnvironmentVariable("BLOCKPLAN_TAB")) { case "3d": ShowTab(1); break; case "mat": ShowTab(2); break; case "parts": ShowTab(3); break; case "stages": ShowTab(4); break; case "todos": ShowTab(5); break; case "layer": ModeLayer.IsChecked = true; ShowTab(0); break; }
     }
 
     void ShowEmpty()
@@ -153,6 +342,7 @@ public partial class MainWindow : Window
                 TexInfo.Text = $"Original-Texturen aus Minecraft {m.Version} ({m.Tex.Count}).";
                 McAssets.Log($"Texturen geladen aus {path}: {m.Tex.Count} Bilder, {m.Faces.Count} Blöcke");
                 ApplyProjectToViews(false);
+                if (tab == 3) partsPage.Refresh(); else if (tab == 4) stagesPage.Refresh(); else if (tab == 5) todosPage.Refresh();
                 return;
             }
             catch (Exception e)
@@ -258,9 +448,11 @@ public partial class MainWindow : Window
         ProjSize.Text = $"{p.W}×{p.D} Grundfläche, {p.H} hoch · {cnt:N0} Blöcke";
         loadingUi = false;
         RefreshList();
+        plan = new PlanData(p); Plan.Plan = plan; Plan.HighlightPart = null;
         ApplyProjectToViews(refit);
         ApplyView();
-        UpdateSnowInfo();
+        UpdateSnowInfo(); UpdateCounts(); RenderPoints(); RenderGuides();
+        if (tab == 3) partsPage.Refresh(); if (tab == 4) stagesPage.Refresh(); if (tab == 5) todosPage.Refresh();
         if (MatPage.IsVisible) BuildMaterials();
     }
 

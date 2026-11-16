@@ -22,7 +22,7 @@ public sealed class SchemDialog : Window
 
         Border Stat(string big, string small) => new()
         {
-            Background = (IBrush?)Application.Current!.FindResource("SunkBrush") ?? Brushes.Gray, CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8),
+            Background = UI.Res("SunkBrush"), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8),
             Child = new StackPanel { Children = { new TextBlock { Text = big, FontSize = 17, FontFamily = new FontFamily("Consolas,monospace") }, new TextBlock { Text = small, FontSize = 11.5, Opacity = .7 } } }
         };
         var sum = new UniformGrid { Columns = 3 };

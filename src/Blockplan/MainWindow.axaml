@@ -43,6 +43,9 @@
         <ToggleButton DockPanel.Dock="Top" x:Name="Nav2D" Classes="nav" Content="▦  2D-Plan" IsChecked="True"/>
         <ToggleButton DockPanel.Dock="Top" x:Name="Nav3D" Classes="nav" Content="⬢  3D-Ansicht"/>
         <ToggleButton DockPanel.Dock="Top" x:Name="NavMat" Classes="nav" Content="☰  Materialliste"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="NavParts" Classes="nav" Content="◫  Baupläne"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="NavStages" Classes="nav" Content="⟋  Etappen"/>
+        <ToggleButton DockPanel.Dock="Top" x:Name="NavTodos" Classes="nav" Content="✓  Team-To-dos"/>
         <Border DockPanel.Dock="Top" Margin="0,14,0,0" Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="12,10">
           <TextBlock x:Name="ViewHint" Classes="note" Text="Ziehen = verschieben · Mausrad = zoomen"/>
         </Border>
@@ -111,6 +114,15 @@
         </DockPanel>
       </Border>
 
+      <ContentControl x:Name="PartsHost" IsVisible="False" Background="{DynamicResource BgBrush}"/>
+      <ContentControl x:Name="StagesHost" IsVisible="False" Background="{DynamicResource BgBrush}"/>
+      <ContentControl x:Name="TodosHost" IsVisible="False" Background="{DynamicResource BgBrush}"/>
+      <Border x:Name="MeasureBox" Classes="glass" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="12,40,12,0" IsVisible="False" BorderBrush="#FF8FBF" BorderThickness="1">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <TextBlock x:Name="MeasureText" Foreground="White" FontSize="13" VerticalAlignment="Center"/>
+          <Button x:Name="BtnMeasureClear" Content="×" Padding="6,0" Foreground="White" Background="Transparent"/>
+        </StackPanel>
+      </Border>
       <Border x:Name="HoverBox" Classes="glass" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12" IsVisible="False">
         <TextBlock x:Name="HoverText" Foreground="White" FontSize="12"/>
       </Border>
@@ -154,6 +166,31 @@
               </Grid>
               <Slider x:Name="CutSlider" Minimum="0" Maximum="1" TickFrequency="1" IsSnapToTickEnabled="True"/>
               <Button x:Name="BtnFit" Content="Ansicht zurücksetzen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" x:Name="ToolsCard">
+            <StackPanel Spacing="8">
+              <TextBlock Text="WERKZEUGE" Classes="h"/>
+              <TextBlock Classes="note" Text="Messen: mit der rechten Maustaste im Plan ziehen."/>
+              <ToggleButton x:Name="ToolArea" Content="Bauplan aus Bereich" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+              <ToggleButton x:Name="ToolPoint" Content="Punkt setzen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+              <CheckBox x:Name="ShowPartsChk" Content="Baupläne im Plan zeigen" IsChecked="True"/>
+              <TextBlock Text="Punkte" Classes="note" FontWeight="SemiBold"/>
+              <StackPanel x:Name="PointsList" Spacing="2"/>
+            </StackPanel>
+          </Border>
+          <Border Classes="card" x:Name="GuidesCard">
+            <StackPanel Spacing="8">
+              <TextBlock Text="HILFSLINIEN" Classes="h"/>
+              <TextBlock Classes="note" Text="Für Plattformen, Mauerringe oder Buchten: Länge in Blöcken, beim Hineinzoomen als Blockraster."/>
+              <WrapPanel>
+                <Button x:Name="GAddEllipse" Content="+ Ellipse" Margin="0,0,6,6"/>
+                <Button x:Name="GAddCircle" Content="+ Kreis" Margin="0,0,6,6"/>
+                <Button x:Name="GAddRect" Content="+ Rechteck" Margin="0,0,6,6"/>
+                <Button x:Name="GAddLine" Content="+ Linie" Margin="0,0,6,6"/>
+              </WrapPanel>
+              <StackPanel x:Name="GuidesList" Spacing="8"/>
             </StackPanel>
           </Border>
 

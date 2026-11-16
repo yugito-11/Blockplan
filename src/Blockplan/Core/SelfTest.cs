@@ -51,6 +51,22 @@ public static class SelfTest
             var bp2 = Project.FromJson(bp.ToJson());
             Ok(bp.Banners.Count == 4 && bp2.Banners.Count == 4 && bp2.Banners.All(kv => Blocks.Get(Blocks.BaseOf(bp2.Cells[kv.Key])).Key.EndsWith("banner")), "Banner-Muster nach Drehung und Speichern am richtigen Block");
 
+            // Planung: Bauplan aus Bereich, Speichern/Laden im Artefakt-Format, Material, Etappen, To-dos, Hilfslinien
+            var ep = Project.FromJson(File.ReadAllText(Path.Combine(dir, "enterprise.json")));
+            var pd = new PlanData(ep); int before = pd.Parts.Count;
+            var cat = pd.AddCat("Test"); var part = pd.AddPart(cat.Id, "Brücke", 80, 0, 80, 120, ep.H - 1, 160);
+            var ep2 = Project.FromJson(ep.ToJson()); var pd2 = new PlanData(ep2); var part2 = pd2.Parts.First(t => t.Id == part!.Id);
+            long matN = pd2.Material(new[] { part2 }).Values.Sum();
+            Ok(part != null && pd2.Parts.Count == before + 1 && part2.Mask.LongLength == part.Mask.LongLength && part2.Mask.SequenceEqual(part.Mask) && matN == part.N,
+               $"Bauplan aus Bereich: {part!.N:N0} Blöcke, Maske gespeichert und geladen, Material {matN:N0}");
+            var origMat = pd2.Material(pd2.Parts.Where(t => t.Id != part.Id)).Values.Sum();
+            Ok(origMat == pd2.Parts.Where(t => t.Id != part.Id).Sum(t => t.N), $"Baupläne aus dem Artefakt: Masken passen zu den Blockzahlen ({origMat:N0})");
+            var stg = pd2.AddStage("Test"); stg.Parts = new() { part.Id }; pd2.AddTodo("Testaufgabe", "Tobi", "s:" + stg.Id, "Claude");
+            var gd = pd2.AddGuide("circle", 50, 50, 21); var cells = gd.Cells();
+            var ep3 = Project.FromJson(ep2.ToJson()); var pd3 = new PlanData(ep3);
+            Ok(pd3.Stages.Any(x => x.Parts.Contains(part.Id)) && pd3.Todos[0].Text == "Testaufgabe" && pd3.Guides.Count == 1, "Etappen, To-dos und Hilfslinien gespeichert");
+            Ok(cells.All(c => Math.Abs(Math.Sqrt((c.x - 50) * (c.x - 50) + (c.z - 50) * (c.z - 50)) - 10) < 1.5) && cells.Count > 50, $"Kreis Ø 21 als Blockraster: {cells.Count} Felder im Abstand 10");
+
             var jar = McAssets.FindJar() ?? McAssets.DownloadAsync(new Progress<string>(s => { })).GetAwaiter().GetResult();
             var mc = McAssets.Load(jar); mc.LoadGermanAsync().GetAwaiter().GetResult();
             int withTex = ent.CountBlocks().Keys.Count(v => mc.FacesOf(v) != null || mc.CrossOf(v) != null);

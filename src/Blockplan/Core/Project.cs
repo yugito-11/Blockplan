@@ -98,8 +98,34 @@ public sealed class Project
         return p;
     }
 
+    /// <summary>Masken der Baupläne (0/1) im selben RLE-Format wie die Zellen.</summary>
+    public static string RleBytes(byte[] a)
+    {
+        var sb = new StringBuilder(); long i = 0;
+        while (i < a.LongLength)
+        {
+            var v = a[i]; long j = i + 1; while (j < a.LongLength && a[j] == v) j++;
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(B36(v)); if (j - i > 1) { sb.Append('*'); sb.Append(B36(j - i)); }
+            i = j;
+        }
+        return sb.ToString();
+    }
+
+    public static byte[] UnRleBytes(string s, long n)
+    {
+        var a = new byte[n]; long p = 0; var span = s.AsSpan();
+        while (span.Length > 0 && p < n)
+        {
+            int c = span.IndexOf(','); var tok = c < 0 ? span : span[..c]; span = c < 0 ? ReadOnlySpan<char>.Empty : span[(c + 1)..];
+            int st = tok.IndexOf('*'); long v = P36(st < 0 ? tok : tok[..st]), cnt = st < 0 ? 1 : P36(tok[(st + 1)..]);
+            long e = Math.Min(n, p + cnt); if (v != 0) for (long k = p; k < e; k++) a[k] = (byte)v; p += cnt;
+        }
+        return a;
+    }
+
     const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
-    static string B36(long v) { if (v == 0) return "0"; var sb = new StringBuilder(); while (v > 0) { sb.Insert(0, digits[(int)(v % 36)]); v /= 36; } return sb.ToString(); }
+    internal static string B36(long v) { if (v == 0) return "0"; var sb = new StringBuilder(); while (v > 0) { sb.Insert(0, digits[(int)(v % 36)]); v /= 36; } return sb.ToString(); }
     static long P36(ReadOnlySpan<char> s) { long v = 0; foreach (var c in s) v = v * 36 + (c <= '9' ? c - '0' : char.ToLowerInvariant(c) - 'a' + 10); return v; }
 
     static string Rle(ushort[] a, Func<int, int> map)
