@@ -1,6 +1,6 @@
 # Blockplan (Windows-Programm)
 
-**Herunterladen:** [Blockplan.exe](https://github.com/yugito-11/blockplan/raw/main/download/Blockplan.exe) – speichern und doppelklicken, keine Installation nötig. Windows warnt beim ersten Start, weil die Datei nicht signiert ist: „Weitere Informationen“ → „Trotzdem ausführen“.
+**Herunterladen:** [Blockplan.exe](https://github.com/yugito-11/blockplan/releases/latest/download/Blockplan.exe) (alle Versionen unter [Releases](https://github.com/yugito-11/blockplan/releases)) – speichern und doppelklicken, keine Installation nötig. Windows warnt beim ersten Start, weil die Datei nicht signiert ist: „Weitere Informationen“ → „Trotzdem ausführen“.
 
 Bauplaner für Minecraft als eigenes Programm – kein Browser, keine Webansicht.
 C# mit Avalonia 12, 3D über OpenGL, Projekte in einer eigenen SQLite-Datenbank.
