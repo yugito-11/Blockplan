@@ -88,7 +88,7 @@ public static class Mesher
         foreach (var v in p.CountBlocks(top).Keys)
         {
             var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v);
-            opq[v] = k == 1;
+            opq[v] = k == 1 && !Entities.IsEntity(v);   // Truhen sind kleiner als ein Block: Nachbarn nicht verdecken
             if (k == 3) cr[v] = atlas.Cross(v); else ft[v] = atlas.Faces(v);
             if (k == 2) trans[v] = Blocks.IsWater(v) || IsSemi(atlas.Tiles[ft[v][0]]);
             if (bank != null && !Blocks.IsWater(v))

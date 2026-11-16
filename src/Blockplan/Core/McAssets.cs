@@ -21,6 +21,25 @@ public sealed class McAssets
     public Dictionary<string, byte[]> Tex { get; } = new();          // Name → RGBA 16×16
     public Dictionary<string, Faces> Faces { get; } = new();          // Block-Key → Texturen
     public Dictionary<string, JsonNode> BlockStates { get; private set; } = new();   // blockstates/*.json
+    public Dictionary<string, (int w, int h, byte[] px)> EntityTex { get; } = new();   // textures/entity/chest|banner
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> regions = new();
+
+    /// <summary>Ausschnitt einer Objekt-Textur als 16×16-Kachel, optional eingefärbt (0xRRGGBB).</summary>
+    public byte[]? Region(string tex, int x, int y, int w, int h, uint tint = 0xffffff)
+    {
+        if (!EntityTex.TryGetValue(tex, out var t) || w <= 0 || h <= 0) return null;
+        return regions.GetOrAdd($"{tex}|{x}|{y}|{w}|{h}|{tint}", _ =>
+        {
+            int sc = t.w / 64; var px = new byte[T * T * 4];   // Texturen können größer als 64 px sein (Ressourcenpakete)
+            for (int j = 0; j < T; j++) for (int i = 0; i < T; i++)
+            {
+                int sx = Math.Clamp((x + i * w / T) * sc, 0, t.w - 1), sy = Math.Clamp((y + j * h / T) * sc, 0, t.h - 1); int so = (sy * t.w + sx) * 4, d = (j * T + i) * 4;
+                px[d] = (byte)(t.px[so] * ((tint >> 16) & 255) / 255); px[d + 1] = (byte)(t.px[so + 1] * ((tint >> 8) & 255) / 255);
+                px[d + 2] = (byte)(t.px[so + 2] * (tint & 255) / 255); px[d + 3] = t.px[so + 3];
+            }
+            return px;
+        });
+    }
     public Dictionary<string, JsonNode> Models { get; private set; } = new();        // models/block/*.json
     public Dictionary<string, string> NamesDe { get; } = new();       // Block-Key → deutscher Name
     public string Version { get; private set; } = "";
@@ -185,6 +204,17 @@ public sealed class McAssets
                 var name = Path.GetFileNameWithoutExtension(n);
                 using var s = e.Open(); using var ms = new MemoryStream(); s.CopyTo(ms);
                 var px = Decode(ms.ToArray(), name); if (px != null) a.Tex[name] = px;
+            }
+            else if (n.EndsWith(".png") && (n.StartsWith("assets/minecraft/textures/entity/chest/") || n.StartsWith("assets/minecraft/textures/entity/banner/")))
+            {   // große Objekt-Texturen (Truhen, Banner) in voller Größe
+                using var s = e.Open(); using var ms = new MemoryStream(); s.CopyTo(ms);
+                using var bm = SKBitmap.Decode(ms.ToArray());
+                if (bm != null)
+                {
+                    var px = new byte[bm.Width * bm.Height * 4];
+                    for (int y = 0; y < bm.Height; y++) for (int x = 0; x < bm.Width; x++) { var c = bm.GetPixel(x, y); int o = (y * bm.Width + x) * 4; px[o] = c.Red; px[o + 1] = c.Green; px[o + 2] = c.Blue; px[o + 3] = c.Alpha; }
+                    a.EntityTex[n[33..^4]] = (bm.Width, bm.Height, px);   // z. B. "chest/normal", "banner/base"
+                }
             }
             else if (n.StartsWith("assets/minecraft/blockstates/") && n.EndsWith(".json")) { try { bs[Path.GetFileNameWithoutExtension(n)] = Parse(e); } catch { } }
             else if (n.StartsWith("assets/minecraft/models/block/") && n.EndsWith(".json")) { try { models[Path.GetFileNameWithoutExtension(n)] = Parse(e); } catch { } }

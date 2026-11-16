@@ -74,6 +74,29 @@ public static class ModelTest
         Ok(fe.Length > f0.Length && fx > .99f, $"Zaun mit Verbindung Ost reicht bis x {fx:0.##}");
         var ps = bank.Get(Blocks.Ensure("glass_pane"), 1 | 4); float pz0 = ps.SelectMany(q => new[] { q.P[2], q.P[5], q.P[8], q.P[11] }).Min(), pz1 = ps.SelectMany(q => new[] { q.P[2], q.P[5], q.P[8], q.P[11] }).Max();
         Ok(pz0 < .01f && pz1 > .99f, $"Glasscheibe Nord–Süd: z {pz0:0.##}..{pz1:0.##}");
+        // Betten und Schilder (in 26.3 echte Blockmodelle)
+        var bh = Box("red_bed[facing=north,occupied=false,part=head]", q => true);
+        Ok(bank.Get(Blocks.Ensure("red_bed[facing=north,occupied=false,part=head]"), 0).Length > 0 && bh.y1 < .6f, $"Bett Kopfteil: y bis {bh.y1:0.##}");
+        var sg = Box("oak_sign[rotation=0,waterlogged=false]", q => true);
+        Ok(sg.y1 > 1f && sg.y1 < 1.2f, $"Schild stehend: Höhe bis y {sg.y1:0.##}");
+        var ws = Box("oak_wall_sign[facing=north,waterlogged=false]", q => true);
+        Ok(ws.z0 > .8f, $"Wandschild Nord: z {ws.z0:0.##}..{ws.z1:0.##} (an der Südwand)");
+        // Truhen: Schloss zeigt in facing
+        foreach (var (f, dz, dx) in new[] { ("south", 1, 0), ("north", -1, 0), ("east", 0, 1), ("west", 0, -1) })
+        {
+            var qs = bank.Get(Blocks.Ensure($"chest[facing={f},type=single,waterlogged=false]"), 0);
+            // Schloss = kleine Flächen auf Höhe 7..11 Pixel, die über den Korpus hinausragen
+            var lockPts = qs.SelectMany(q => Enumerable.Range(0, 4).Select(k => (x: q.P[k * 3], y: q.P[k * 3 + 1], z: q.P[k * 3 + 2]))).Where(p => p.y > 6.9f / 16 && p.y < 11.1f / 16 && (p.x > 15.5f / 16 || p.x < .5f / 16 || p.z > 15.5f / 16 || p.z < .5f / 16)).ToList();
+            float lx = lockPts.Count > 0 ? lockPts.Average(p => p.x) : -1, lz = lockPts.Count > 0 ? lockPts.Average(p => p.z) : -1;
+            bool ok = lockPts.Count > 0 && (dz != 0 ? (dz > 0 ? lz > .9f : lz < .1f) : (dx > 0 ? lx > .9f : lx < .1f));
+            Ok(ok, $"Truhe {f}: Schloss bei x {lx:0.##} z {lz:0.##}");
+        }
+        var dl = Box("chest[facing=north,type=left,waterlogged=false]", q => true); var dr = Box("chest[facing=north,type=right,waterlogged=false]", q => true);
+        Ok(dl.x1 > .99f && dr.x0 < .01f, $"Doppeltruhe Nord: links x {dl.x0:0.##}..{dl.x1:0.##}, rechts x {dr.x0:0.##}..{dr.x1:0.##}");
+        var bn = Box("red_banner[rotation=0]", q => true);
+        Ok(bn.y1 > 1.7f && bn.y1 < 1.8f, $"Banner stehend: Höhe {bn.y1:0.##} Blöcke");
+        var wb = Box("red_wall_banner[facing=south]", q => true);
+        Ok(wb.z1 < .1f && wb.y1 <= 1.01f && wb.y0 < 0, $"Wandbanner Süd: z {wb.z0:0.##}..{wb.z1:0.##}, y {wb.y0:0.##}..{wb.y1:0.##} (an der Nordwand, hängt nach unten)");
         Console.WriteLine(fail == 0 ? "ALLE MODELLE OK" : fail + " Fehler");
         return fail;
     }

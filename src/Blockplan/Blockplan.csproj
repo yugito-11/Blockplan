@@ -8,7 +8,7 @@
     <RootNamespace>Blockplan</RootNamespace>
     <AssemblyName>Blockplan</AssemblyName>
     <ApplicationIcon>Assets\blockplan.ico</ApplicationIcon>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <Product>Blockplan</Product>
     <InvariantGlobalization>false</InvariantGlobalization>
     <ServerGarbageCollection>false</ServerGarbageCollection>

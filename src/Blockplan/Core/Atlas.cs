@@ -25,6 +25,9 @@ public sealed class Atlas
         lock (faces) return Tile(px);
     }
 
+    /// <summary>Kachel aus fertigen Pixeln (z. B. Ausschnitt einer Objekt-Textur).</summary>
+    public int TileOf(byte[] px) { lock (faces) return Tile(px); }
+
     /// <summary>Kachel je Seite (+x,-x,+y,-y,+z,-z).</summary>
     public int[] Faces(int v)
     {

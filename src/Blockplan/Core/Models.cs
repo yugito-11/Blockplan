@@ -227,6 +227,8 @@ public sealed class ModelBank
                 }
             }
         }
+        // Truhen und Banner haben kein Blockmodell (das Spiel zeichnet sie als Objekte)
+        if (outq.Count == 0 && Entities.IsEntity(v)) outq.AddRange(Entities.Build(v, mc, atlas));
         return outq.ToArray();
     }
 
