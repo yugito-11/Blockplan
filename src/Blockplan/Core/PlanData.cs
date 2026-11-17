@@ -105,6 +105,10 @@ public sealed class Guide : JItem
     public double Z2 { get => D("z2"); set => J["z2"] = value; }
     public string Color { get => S("color", "#7ee08f"); set => J["color"] = value; }
     public bool On { get => B("on", true); set => J["on"] = value; }
+    /// <summary>Unterkante (Projekt-Höhe, 0 = unterste Ebene) und Höhe in Blöcken – für 3D und die Ebenen-Ansicht.</summary>
+    public int Y { get => (int)D("y"); set => J["y"] = value; }
+    public int H { get => Math.Max(1, (int)D("h", 12)); set => J["h"] = Math.Max(1, value); }
+    public bool AtLayer(int y) => y >= Y && y < Y + H;
 
     /// <summary>Felder (x, z), die die Linie im Raster berührt – so wie man sie in Minecraft setzen würde.</summary>
     public List<(int x, int z)> Cells()

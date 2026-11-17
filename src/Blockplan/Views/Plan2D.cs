@@ -277,8 +277,9 @@ public sealed class Plan2D : Control
         {
             foreach (var g in pl.Guides.Where(g => g.On))
             {
-                var col = Br(g.Color); var pen = new Pen(col, 1.8);
-                if (scale >= 4) foreach (var (x, z) in g.Cells()) ctx.FillRectangle(Br(g.Color, .55), new Rect(S(x, z), new Size(scale, scale)));
+                bool here = !LayerMode || g.AtLayer(layer);   // in der Ebenen-Ansicht: außerhalb ihrer Höhe nur blass
+                var col = Br(g.Color, here ? 1 : .3); var pen = new Pen(col, here ? 1.8 : 1.2);
+                if (scale >= 4 && here) foreach (var (x, z) in g.Cells()) ctx.FillRectangle(Br(g.Color, .55), new Rect(S(x, z), new Size(scale, scale)));
                 if (g.Type == "line")
                 {
                     ctx.DrawLine(pen, S(g.Cx + .5, g.Cz + .5), S(g.X2 + .5, g.Z2 + .5));

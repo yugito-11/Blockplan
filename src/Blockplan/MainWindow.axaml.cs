@@ -296,7 +296,8 @@ public partial class MainWindow : Window
     {
         if (plan == null || project == null) return;
         var (cx, cz) = Plan.ViewCenter();
-        plan.AddGuide(type, Math.Clamp(cx, 0, project.W), Math.Clamp(cz, 0, project.D), type == "line" ? 20 : 31);
+        var g = plan.AddGuide(type, Math.Clamp(cx, 0, project.W), Math.Clamp(cz, 0, project.D), type == "line" ? 20 : 31);
+        if (ModeLayer.IsChecked == true) g.Y = (int)LayerSlider.Value;   // neue Hilfslinie startet auf der gezeigten Ebene
         ScheduleSave(); RenderGuides(); Plan.InvalidateVisual();
     }
 
@@ -341,7 +342,23 @@ public partial class MainWindow : Window
                 if (g.Type == "circle") { F("Durchmesser", g.A, v => g.A = Math.Max(1, v), 0); row++; }
                 else { F(g.Type == "rect" ? "Breite (X)" : "Länge (X)", g.A, v => g.A = Math.Max(1, v), 0); F(g.Type == "rect" ? "Tiefe (Z)" : "Breite (Z)", g.Bv, v => g.Bv = Math.Max(1, v), 1); }
             }
+            // Höhe: Unterkante als echte Welt-Höhe, dazu die Höhe in Blöcken
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            void H(string label, double val, double min, Action<int> set, int column)
+            {
+                var sp = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 0, 4) };
+                sp.Children.Add(new TextBlock { Text = label, Classes = { "note" } });
+                var n = new NumericUpDown { Value = (decimal)val, Minimum = (decimal)min, Increment = 1, FormatString = "0" };
+                n.ValueChanged += (_, _) => { if (n.Value is { } v) { set((int)v); ScheduleSave(); Plan.InvalidateVisual(); } };
+                sp.Children.Add(n); Grid.SetColumn(sp, column * 2); Grid.SetRow(sp, row); grid.Children.Add(sp);
+            }
+            int oy = project.OriginY;
+            H("Ab Höhe Y", oy + g.Y, -64, v => g.Y = v - oy, 0); H("Höhe (Blöcke)", g.H, 1, v => g.H = v, 1); row++;
             box.Children.Add(grid);
+            var lay = new Button { Content = "Auf aktuelle Ebene setzen", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center };
+            ToolTip.SetTip(lay, "Unterkante auf die Ebene, die gerade im 2D-Plan gezeigt wird");
+            lay.Click += (_, _) => { g.Y = (int)LayerSlider.Value; ScheduleSave(); RenderGuides(); Plan.InvalidateVisual(); };
+            box.Children.Add(lay);
             GuidesList.Children.Add(new Border { BorderBrush = UI.Res("LineBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Child = box });
         }
         if (plan.Guides.Count == 0) GuidesList.Children.Add(new TextBlock { Text = "Noch keine Hilfslinien. Sie erscheinen in der Mitte der Ansicht.", Classes = { "note" }, TextWrapping = TextWrapping.Wrap });

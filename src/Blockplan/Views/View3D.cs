@@ -264,8 +264,8 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
                 foreach (var g in guidesPlan.Guides.Where(g => g.On))
                 {
                     uint col; try { var c = Avalonia.Media.Color.Parse(g.Color); col = (uint)c.R << 16 | (uint)c.G << 8 | c.B; } catch { col = 0x7ee08f; }
-                    int t = Solid(col); float h = (float)Math.Max(1, JItemH(g));
-                    foreach (var (x, z) in g.Cells()) AddBox(V, I, x + ox, 0, z + oz, x + 1 + ox, h, z + 1 + oz, t, 3);
+                    int t = Solid(col); float y0 = g.Y, y1 = g.Y + g.H;
+                    foreach (var (x, z) in g.Cells()) AddBox(V, I, x + ox, y0, z + oz, x + 1 + ox, y1, z + 1 + oz, t, 3);
                 }
             lock (pending) pending.Add(("guides", V.Count > 0 ? new List<MeshChunk> { new() { V = V.ToArray(), I = I.ToArray(), Translucent = true } } : null));
         }
@@ -273,7 +273,6 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         RequestNextFrameRendering();
     }
 
-    static double JItemH(Guide g) => g.J["h"] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<double>(out var d) ? d : g.J["h"] is System.Text.Json.Nodes.JsonValue v2 && v2.TryGetValue<int>(out var i) ? i : 12;
 
     /* ---------- OpenGL ---------- */
     protected override void OnOpenGlInit(GlInterface gi)

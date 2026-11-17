@@ -62,9 +62,9 @@ public static class SelfTest
             var origMat = pd2.Material(pd2.Parts.Where(t => t.Id != part.Id)).Values.Sum();
             Ok(origMat == pd2.Parts.Where(t => t.Id != part.Id).Sum(t => t.N), $"Baupläne aus dem Artefakt: Masken passen zu den Blockzahlen ({origMat:N0})");
             var stg = pd2.AddStage("Test"); stg.Parts = new() { part.Id }; pd2.AddTodo("Testaufgabe", "Tobi", "s:" + stg.Id, "Claude");
-            var gd = pd2.AddGuide("circle", 50, 50, 21); var cells = gd.Cells();
+            var gd = pd2.AddGuide("circle", 50, 50, 21); var cells = gd.Cells(); gd.Y = 30; gd.H = 5;
             var ep3 = Project.FromJson(ep2.ToJson()); var pd3 = new PlanData(ep3);
-            Ok(pd3.Stages.Any(x => x.Parts.Contains(part.Id)) && pd3.Todos[0].Text == "Testaufgabe" && pd3.Guides.Count == 1, "Etappen, To-dos und Hilfslinien gespeichert");
+            Ok(pd3.Stages.Any(x => x.Parts.Contains(part.Id)) && pd3.Todos[0].Text == "Testaufgabe" && pd3.Guides.Count == 1 && pd3.Guides[0].Y == 30 && pd3.Guides[0].H == 5 && pd3.Guides[0].AtLayer(34) && !pd3.Guides[0].AtLayer(35), "Etappen, To-dos und Hilfslinien gespeichert");
             Ok(cells.All(c => Math.Abs(Math.Sqrt((c.x - 50) * (c.x - 50) + (c.z - 50) * (c.z - 50)) - 10) < 1.5) && cells.Count > 50, $"Kreis Ø 21 als Blockraster: {cells.Count} Felder im Abstand 10");
 
             var jar = McAssets.FindJar() ?? McAssets.DownloadAsync(new Progress<string>(s => { })).GetAwaiter().GetResult();
