@@ -61,6 +61,7 @@
           <ComboBox x:Name="ProjSel" HorizontalAlignment="Stretch" Height="38" FontWeight="SemiBold"/>
           <Button x:Name="BtnOpen" Classes="accent" Content="Schematic öffnen …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="40"/>
           <Button x:Name="BtnImport" Content="Aus Artefakt importieren …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="36"/>
+          <Button x:Name="BtnBautrupp" Content="An Bautrupp senden …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Height="36" ToolTip.Tip="Etappen, Baupläne oder Ebenen als Aufgaben in eure Bautrupp-Gruppe schicken"/>
           <Border Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="10,8" Margin="0,4,0,0">
             <StackPanel Spacing="6">
               <TextBlock Text="MINECRAFT-TEXTUREN" Classes="h"/>

@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         Nav2D.Click += (_, _) => ShowTab(0); Nav3D.Click += (_, _) => ShowTab(1); NavMat.Click += (_, _) => ShowTab(2);
         BtnOpen.Click += async (_, _) => await OpenSchematic();
         BtnImport.Click += async (_, _) => await ImportArtifact();
+        BtnBautrupp.Click += async (_, _) => await SendToBautrupp();
         BtnJar.Click += async (_, _) => await PickJar();
         BtnCheckUpdate.Click += async (_, _) => await CheckUpdate(true);
         BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
@@ -467,6 +468,14 @@ public partial class MainWindow : Window
         w.Opened += (_, _) => { tb.Focus(); tb.SelectAll(); };
         await w.ShowDialog(this);
         return string.IsNullOrEmpty(res) ? null : res;
+    }
+
+    async Task SendToBautrupp()
+    {
+        if (project == null || plan == null) { await Message("Kein Projekt", "Öffne zuerst ein Projekt."); return; }
+        var d = new BautruppDialog(project, plan, k => store.Get(k), (k, v) => store.Set(k, v));
+        await d.ShowDialog(this);
+        if (d.Sent) SaveProject();
     }
 
     void Busy(string? text) { BusyBox.IsVisible = text != null; if (text != null) BusyText.Text = text; }

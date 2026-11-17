@@ -13,6 +13,7 @@ C# mit Avalonia 12, 3D über OpenGL, Projekte in einer eigenen SQLite-Datenbank.
 - Materialliste mit deutschen Namen, Stacks und Shulkerkisten
 - Minecraft-Texturen automatisch aus `%APPDATA%\.minecraft\versions` oder einmalig von Mojang
 - Import der Projekte aus dem Blockplan-Artefakt (Export-Knopf dort unter Einstellungen → Projekt)
+- **An Bautrupp senden:** Etappen, Baupläne oder Ebenen als Aufgaben in eine [Bautrupp](https://github.com/yugito-11/bautrupp)-Gruppe schicken (gleiches Format wie der Schematic-Import der Bautrupp-Webseite). Mit Baustellen-Koordinaten zählt die Bautrupp-Mod Block für Block nach Plan mit.
 
 ## Wo die Daten liegen
 `%LOCALAPPDATA%\Blockplan\blockplan.db` (Projekte und Einstellungen), daneben die heruntergeladene Spieldatei.
