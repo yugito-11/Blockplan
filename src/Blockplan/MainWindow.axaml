@@ -211,6 +211,12 @@
                 <Button x:Name="GAddRect" Content="+ Rechteck" Margin="0,0,6,6"/>
                 <Button x:Name="GAddLine" Content="+ Linie" Margin="0,0,6,6"/>
               </WrapPanel>
+              <TextBlock Classes="note" Text="Automatisch:" FontWeight="SemiBold"/>
+              <WrapPanel>
+                <Button x:Name="GAddOutline" Content="+ Umriss vom Bau" Margin="0,0,6,6" ToolTip.Tip="Zeichnet den Außenrand des Baus nach – in der Ebenen-Ansicht nur für die gezeigte Ebene"/>
+                <Button x:Name="GAddGrid" Content="+ Raster" Margin="0,0,6,6" ToolTip.Tip="Gitterlinien in festem Abstand an Welt-Koordinaten (16 = Chunk-Grenzen)"/>
+              </WrapPanel>
+              <ToggleButton x:Name="GDrawLine" Content="✎ Linie mit der Maus ziehen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Im Plan mit der linken Maustaste ziehen. Umschalt = nur gerade oder diagonal."/>
               <StackPanel x:Name="GuidesList" Spacing="8"/>
             </StackPanel>
           </Border>

@@ -246,8 +246,8 @@ public partial class MainWindow : Window
         stagesPage = new StagesPage(Ctx, ScheduleSave); StagesHost.Content = stagesPage;
         todosPage = new TodosPage(Ctx, ScheduleSave, () => store.Get("who") ?? "", n => store.Set("who", n), OpenRef); TodosHost.Content = todosPage;
         NavParts.Click += (_, _) => ShowTab(3); NavStages.Click += (_, _) => ShowTab(4); NavTodos.Click += (_, _) => ShowTab(5);
-        ToolArea.Click += (_, _) => { ToolPoint.IsChecked = false; Plan.Mode = ToolArea.IsChecked == true ? "area" : ""; ViewHint.Text = Plan.Mode == "area" ? "Ziehe im Plan einen Rahmen um den Teil, der ein Bauplan werden soll." : ViewHint.Text; };
-        ToolPoint.Click += (_, _) => { ToolArea.IsChecked = false; Plan.Mode = ToolPoint.IsChecked == true ? "point" : ""; ViewHint.Text = Plan.Mode == "point" ? "Klicke im Plan auf die Stelle für den Punkt." : ViewHint.Text; };
+        ToolArea.Click += (_, _) => { ToolPoint.IsChecked = false; GDrawLine.IsChecked = false; Plan.Mode = ToolArea.IsChecked == true ? "area" : ""; ViewHint.Text = Plan.Mode == "area" ? "Ziehe im Plan einen Rahmen um den Teil, der ein Bauplan werden soll." : ViewHint.Text; };
+        ToolPoint.Click += (_, _) => { ToolArea.IsChecked = false; GDrawLine.IsChecked = false; Plan.Mode = ToolPoint.IsChecked == true ? "point" : ""; ViewHint.Text = Plan.Mode == "point" ? "Klicke im Plan auf die Stelle für den Punkt." : ViewHint.Text; };
         ShowPartsChk.IsCheckedChanged += (_, _) => { Plan.ShowParts = ShowPartsChk.IsChecked == true; Plan.InvalidateVisual(); };
         Plan.MeasureChanged += t => { MeasureText.Text = t; MeasureBox.IsVisible = t.Length > 0 && tab == 0; };
         BtnMeasureClear.Click += (_, _) => Plan.ClearMeasure();
@@ -262,6 +262,19 @@ public partial class MainWindow : Window
         Plan.AreaSelected += async (x0, z0, x1, z1) => { ToolArea.IsChecked = false; Plan.Mode = ""; await CreatePart(x0, z0, x1, z1); };
         GAddEllipse.Click += (_, _) => AddGuide("ellipse"); GAddCircle.Click += (_, _) => AddGuide("circle");
         GAddRect.Click += (_, _) => AddGuide("rect"); GAddLine.Click += (_, _) => AddGuide("line");
+        GAddOutline.Click += (_, _) => AddAutoGuide("outline"); GAddGrid.Click += (_, _) => AddAutoGuide("grid");
+        GDrawLine.Click += (_, _) =>
+        {
+            ToolArea.IsChecked = ToolPoint.IsChecked = false; Plan.Mode = GDrawLine.IsChecked == true ? "line" : "";
+            if (Plan.Mode == "line") ViewHint.Text = "Ziehe im Plan mit der linken Maustaste eine Linie. Umschalt = nur gerade oder diagonal. Nochmal auf den Knopf = fertig.";
+        };
+        Plan.LineDrawn += (x0, z0, x1, z1) =>
+        {
+            if (plan == null || project == null || (x0 == x1 && z0 == z1)) return;
+            var g = plan.AddGuide("line", x0, z0, 1); g.X2 = x1; g.Z2 = z1;
+            if (ModeLayer.IsChecked == true) g.Y = (int)LayerSlider.Value;
+            ScheduleSave(); RenderGuides(); Plan.InvalidateVisual();
+        };
     }
 
     void ShowPartInPlan(Part t)
@@ -301,6 +314,21 @@ public partial class MainWindow : Window
         ScheduleSave(); RenderGuides(); Plan.InvalidateVisual();
     }
 
+    void AddAutoGuide(string type)
+    {
+        if (plan == null || project == null) return;
+        bool layerMode = ModeLayer.IsChecked == true; int ly = (int)LayerSlider.Value;
+        var g = plan.AddGuide(type, 0, 0, 16);
+        if (type == "outline")
+        {
+            g.Y = layerMode ? ly : 0; g.H = layerMode ? 1 : project.H;
+            g.Name = layerMode ? $"Umriss Y {project.OriginY + ly}" : "Umriss";
+            if (g.ComputeOutline(project) == 0) { plan.Remove("guides", g); ViewHint.Text = "Auf dieser Ebene gibt es keine Blöcke – kein Umriss."; return; }
+        }
+        else { g.Y = layerMode ? ly : 0; g.H = 1; g.Name = "Raster 16"; }
+        ScheduleSave(); RenderGuides(); Plan.InvalidateVisual();
+    }
+
     void RenderGuides()
     {
         GuidesList.Children.Clear();
@@ -331,7 +359,16 @@ public partial class MainWindow : Window
                 sp.Children.Add(n); Grid.SetColumn(sp, column * 2); Grid.SetRow(sp, row); grid.Children.Add(sp);
                 if (column == 1) row++;
             }
-            if (g.Type == "line")
+            if (g.Type == "outline")
+            {
+                var info = new TextBlock { Text = $"{g.Cells().Count:N0} Randfelder, automatisch aus dem Bau", Classes = { "note" }, TextWrapping = TextWrapping.Wrap };
+                grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto)); Grid.SetColumnSpan(info, 3); Grid.SetRow(info, row++); grid.Children.Add(info);
+            }
+            else if (g.Type == "grid")
+            {
+                F("Abstand (Blöcke)", g.A, v => { g.A = Math.Max(2, Math.Round(v)); g.Name = $"Raster {g.A:0}"; }, 0); row++;
+            }
+            else if (g.Type == "line")
             {
                 F("Start X", ox + g.Cx, v => g.Cx = v - ox, 0); F("Start Z", oz + g.Cz, v => g.Cz = v - oz, 1);
                 F("Ende X", ox + g.X2, v => g.X2 = v - ox, 0); F("Ende Z", oz + g.Z2, v => g.Z2 = v - oz, 1);
@@ -353,11 +390,12 @@ public partial class MainWindow : Window
                 sp.Children.Add(n); Grid.SetColumn(sp, column * 2); Grid.SetRow(sp, row); grid.Children.Add(sp);
             }
             int oy = project.OriginY;
-            H("Ab Höhe Y", oy + g.Y, -64, v => g.Y = v - oy, 0); H("Höhe (Blöcke)", g.H, 1, v => g.H = v, 1); row++;
+            void Re() { if (g.Type == "outline") { g.ComputeOutline(project); } }   // Umriss folgt der Höhe automatisch
+            H("Ab Höhe Y", oy + g.Y, -64, v => { g.Y = v - oy; Re(); }, 0); H("Höhe (Blöcke)", g.H, 1, v => { g.H = v; Re(); }, 1); row++;
             box.Children.Add(grid);
             var lay = new Button { Content = "Auf aktuelle Ebene setzen", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center };
             ToolTip.SetTip(lay, "Unterkante auf die Ebene, die gerade im 2D-Plan gezeigt wird");
-            lay.Click += (_, _) => { g.Y = (int)LayerSlider.Value; ScheduleSave(); RenderGuides(); Plan.InvalidateVisual(); };
+            lay.Click += (_, _) => { g.Y = (int)LayerSlider.Value; if (g.Type == "outline") { g.H = 1; g.ComputeOutline(project); } ScheduleSave(); RenderGuides(); Plan.InvalidateVisual(); };
             box.Children.Add(lay);
             GuidesList.Children.Add(new Border { BorderBrush = UI.Res("LineBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(8), Child = box });
         }

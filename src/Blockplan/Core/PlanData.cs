@@ -110,12 +110,61 @@ public sealed class Guide : JItem
     public int H { get => Math.Max(1, (int)D("h", 12)); set => J["h"] = Math.Max(1, value); }
     public bool AtLayer(int y) => y >= Y && y < Y + H;
 
-    /// <summary>Felder (x, z), die die Linie im Raster berührt – so wie man sie in Minecraft setzen würde.</summary>
-    public List<(int x, int z)> Cells()
+    /// <summary>Automatischer Umriss: Randfelder des Baus, gespeichert als "x,z;x,z;…".</summary>
+    public string Pts { get => S("pts"); set => J["pts"] = value; }
+    public bool Auto => Type is "outline" or "grid";
+
+    /// <summary>Umriss neu berechnen: alle Felder mit Blöcken in den Ebenen Y … Y+H-1, die an ein leeres Feld grenzen.</summary>
+    public int ComputeOutline(Project p)
     {
+        int W = p.W, D = p.D, WD = W * D, y0 = Math.Max(0, Y), y1 = Math.Min(p.H, Y + H);
+        var fill = new bool[WD];
+        for (int y = y0; y < y1; y++) { int b = y * WD; for (int c = 0; c < WD; c++) if (p.Cells[b + c] != 0) fill[c] = true; }
+        var sb = new System.Text.StringBuilder(); int n = 0;
+        for (int z = 0; z < D; z++)
+            for (int x = 0; x < W; x++)
+            {
+                int c = z * W + x; if (!fill[c]) continue;
+                bool edge = x == 0 || z == 0 || x == W - 1 || z == D - 1 || !fill[c - 1] || !fill[c + 1] || !fill[c - W] || !fill[c + W];
+                if (!edge) continue;
+                if (n++ > 0) sb.Append(';'); sb.Append(x).Append(',').Append(z);
+            }
+        Pts = sb.ToString(); return n;
+    }
+
+    static readonly Dictionary<string, List<(int, int)>> ptsCache = new();
+    static List<(int, int)> ParsePts(string s)
+    {
+        lock (ptsCache)
+        {
+            if (ptsCache.TryGetValue(s, out var r)) return r;
+            r = new List<(int, int)>();
+            foreach (var it in s.Split(';', StringSplitOptions.RemoveEmptyEntries)) { int k = it.IndexOf(','); if (k > 0 && int.TryParse(it[..k], out var x) && int.TryParse(it[(k + 1)..], out var z)) r.Add((x, z)); }
+            if (ptsCache.Count > 16) ptsCache.Clear();
+            return ptsCache[s] = r;
+        }
+    }
+
+    /// <summary>Raster: Spalten/Zeilen, deren Welt-Koordinate durch den Abstand teilbar ist (bei 16 = Chunk-Grenzen).</summary>
+    public IEnumerable<int> GridLines(int size, int origin)
+    {
+        int n = Math.Max(2, (int)A);
+        for (int i = 0; i < size; i++) if (((origin + i) % n + n) % n == 0) yield return i;
+    }
+
+    /// <summary>Felder (x, z), die die Linie im Raster berührt – so wie man sie in Minecraft setzen würde.</summary>
+    public List<(int x, int z)> Cells(Project? p = null)
+    {
+        if (Type == "outline") return ParsePts(Pts);
         var set = new HashSet<(int, int)>(); var r = new List<(int, int)>();
         void Add(double x, double z) { var c = ((int)Math.Floor(x), (int)Math.Floor(z)); if (set.Add(c)) r.Add(c); }
-        if (Type == "line")
+        if (Type == "grid")
+        {
+            if (p == null) return r;
+            foreach (var x in GridLines(p.W, p.OriginX)) for (int z = 0; z < p.D; z++) Add(x, z);
+            foreach (var z in GridLines(p.D, p.OriginZ)) for (int x = 0; x < p.W; x++) Add(x, z);
+        }
+        else if (Type == "line")
         {
             double len = Math.Max(Math.Abs(X2 - Cx), Math.Abs(Z2 - Cz)); int n = (int)Math.Ceiling(len * 2) + 1;
             for (int i = 0; i <= n; i++) { double t = n == 0 ? 0 : i / (double)n; Add(Cx + .5 + (X2 - Cx) * t, Cz + .5 + (Z2 - Cz) * t); }
@@ -171,7 +220,7 @@ public sealed class PlanData
         var cols = new[] { "#7ee08f", "#ffd23a", "#5ab4ff", "#ff6b9a", "#c08bff", "#ff9f43" };
         var o = new JsonObject
         {
-            ["id"] = JItem.NewId("g"), ["type"] = type, ["name"] = type switch { "circle" => "Kreis", "rect" => "Rechteck", "line" => "Linie", _ => "Ellipse" },
+            ["id"] = JItem.NewId("g"), ["type"] = type, ["name"] = type switch { "circle" => "Kreis", "rect" => "Rechteck", "line" => "Linie", "outline" => "Umriss", "grid" => "Raster", _ => "Ellipse" },
             ["cx"] = Math.Round(cx), ["cz"] = Math.Round(cz), ["a"] = size, ["b"] = type == "ellipse" ? Math.Round(size * .6) : size,
             ["x2"] = Math.Round(cx + size), ["z2"] = Math.Round(cz), ["h"] = 12, ["color"] = cols[Arr("guides").Count % cols.Length], ["on"] = true,
         };

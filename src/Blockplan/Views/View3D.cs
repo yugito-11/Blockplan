@@ -265,7 +265,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
                 {
                     uint col; try { var c = Avalonia.Media.Color.Parse(g.Color); col = (uint)c.R << 16 | (uint)c.G << 8 | c.B; } catch { col = 0x7ee08f; }
                     int t = Solid(col); float y0 = g.Y, y1 = g.Y + g.H;
-                    foreach (var (x, z) in g.Cells()) AddBox(V, I, x + ox, y0, z + oz, x + 1 + ox, y1, z + 1 + oz, t, 3);
+                    foreach (var (x, z) in g.Cells(p)) AddBox(V, I, x + ox, y0, z + oz, x + 1 + ox, y1, z + 1 + oz, t, 3);
                 }
             lock (pending) pending.Add(("guides", V.Count > 0 ? new List<MeshChunk> { new() { V = V.ToArray(), I = I.ToArray(), Translucent = true } } : null));
         }

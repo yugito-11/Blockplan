@@ -66,6 +66,15 @@ public static class SelfTest
             var ep3 = Project.FromJson(ep2.ToJson()); var pd3 = new PlanData(ep3);
             Ok(pd3.Stages.Any(x => x.Parts.Contains(part.Id)) && pd3.Todos[0].Text == "Testaufgabe" && pd3.Guides.Count == 1 && pd3.Guides[0].Y == 30 && pd3.Guides[0].H == 5 && pd3.Guides[0].AtLayer(34) && !pd3.Guides[0].AtLayer(35), "Etappen, To-dos und Hilfslinien gespeichert");
             Ok(cells.All(c => Math.Abs(Math.Sqrt((c.x - 50) * (c.x - 50) + (c.z - 50) * (c.z - 50)) - 10) < 1.5) && cells.Count > 50, $"Kreis Ø 21 als Blockraster: {cells.Count} Felder im Abstand 10");
+            {   // automatische Hilfslinien
+                var tp = new Project { Name = "t", W = 10, D = 8, H = 3, OriginX = -3, OriginZ = 5 }; tp.Cells = new ushort[tp.W * tp.D * tp.H];
+                for (int z = 2; z < 6; z++) for (int x = 2; x < 7; x++) tp.Cells[1 * 80 + z * 10 + x] = 1;   // 5x4 auf Ebene 1
+                var tpd = new PlanData(tp); var ol = tpd.AddGuide("outline", 0, 0, 0); ol.Y = 0; ol.H = 3; int n1 = ol.ComputeOutline(tp);
+                ol.Y = 0; ol.H = 1; int n0 = ol.ComputeOutline(tp);
+                var gr = tpd.AddGuide("grid", 0, 0, 4); var gx = gr.GridLines(tp.W, tp.OriginX).ToList(); var gz = gr.GridLines(tp.D, tp.OriginZ).ToList();
+                Ok(n1 == 14 && n0 == 0 && gx.SequenceEqual(new[] { 3, 7 }) && gz.SequenceEqual(new[] { 3, 7 }) && gr.Cells(tp).Count == 2 * 8 + 2 * 10 - 4,
+                   $"Automatische Hilfslinien: Umriss {n1} Randfelder, Raster bei X {string.Join(",", gx)} / Z {string.Join(",", gz)}");
+            }
 
             var jar = McAssets.FindJar() ?? McAssets.DownloadAsync(new Progress<string>(s => { })).GetAwaiter().GetResult();
             var mc = McAssets.Load(jar); mc.LoadGermanAsync().GetAwaiter().GetResult();

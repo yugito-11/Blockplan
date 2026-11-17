@@ -245,8 +245,10 @@ public sealed class Plan2D : Control
     public event Action<int, int>? PointPlaced;
     public event Action<int, int, int, int>? AreaSelected;
     public event Action<string>? MeasureChanged;
-    (int x0, int z0, int x1, int z1)? meas, area;
-    bool measuring, selecting;
+    /// <summary>Im Modus "line": mit der linken Maustaste gezogene Linie (Projektkoordinaten).</summary>
+    public event Action<int, int, int, int>? LineDrawn;
+    (int x0, int z0, int x1, int z1)? meas, area, draw;
+    bool measuring, selecting, drawing;
 
     Point S(double x, double z) => new(off.X + x * scale, off.Y + z * scale);
     static IBrush Br(string hex, double a = 1) { try { var c = Color.Parse(hex); return new SolidColorBrush(c, a); } catch { return new SolidColorBrush(Colors.White, a); } }
@@ -279,6 +281,21 @@ public sealed class Plan2D : Control
             {
                 bool here = !LayerMode || g.AtLayer(layer);   // in der Ebenen-Ansicht: außerhalb ihrer Höhe nur blass
                 var col = Br(g.Color, here ? 1 : .3); var pen = new Pen(col, here ? 1.8 : 1.2);
+                if (g.Type == "outline")
+                {   // automatischer Umriss: die Randfelder selbst, in jeder Zoomstufe
+                    var fb = Br(g.Color, here ? .75 : .25); var cs = g.Cells();
+                    foreach (var (x, z) in cs) ctx.FillRectangle(fb, new Rect(S(x, z), new Size(Math.Max(scale, 1), Math.Max(scale, 1))));
+                    if (cs.Count > 0 && g.Name.Length > 0) { var (fx, fz) = cs[0]; Tag(ctx, g.Name, S(fx + .5, fz + .5) + new Point(0, -14), col); }
+                    continue;
+                }
+                if (g.Type == "grid")
+                {   // Raster an festen Welt-Koordinaten (16 = Chunk-Grenzen)
+                    if (scale >= 4 && here) foreach (var (x, z) in g.Cells(p)) ctx.FillRectangle(Br(g.Color, .3), new Rect(S(x, z), new Size(scale, scale)));
+                    var gp = new Pen(col, here ? 1.4 : 1); bool lab = g.A * scale >= 46;
+                    foreach (var x in g.GridLines(p.W, p.OriginX)) { ctx.DrawLine(gp, S(x, 0), S(x, p.D)); if (lab) Tag(ctx, $"X {p.OriginX + x}", new Point(S(x, 0).X, Math.Max(S(x, 0).Y, 0) + 12), col); }
+                    foreach (var z in g.GridLines(p.D, p.OriginZ)) { ctx.DrawLine(gp, S(0, z), S(p.W, z)); if (lab) Tag(ctx, $"Z {p.OriginZ + z}", new Point(Math.Max(S(0, z).X, 0) + 30, S(0, z).Y), col); }
+                    continue;
+                }
                 if (scale >= 4 && here) foreach (var (x, z) in g.Cells()) ctx.FillRectangle(Br(g.Color, .55), new Rect(S(x, z), new Size(scale, scale)));
                 if (g.Type == "line")
                 {
@@ -308,6 +325,12 @@ public sealed class Plan2D : Control
             ctx.FillRectangle(Br("#ff8fbf", .5), new Rect(S(m.x0, m.z0), new Size(scale, scale))); ctx.FillRectangle(Br("#ff8fbf", .5), new Rect(S(m.x1, m.z1), new Size(scale, scale)));
             ctx.DrawLine(new Pen(col, 2.5), a, b);
             Tag(ctx, MeasureText(m), new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2 - 14), col);
+        }
+        if (draw is { } dw)
+        {
+            var a = S(dw.x0 + .5, dw.z0 + .5); var b = S(dw.x1 + .5, dw.z1 + .5); var col = Br("#7ee08f");
+            ctx.DrawLine(new Pen(col, 2.5), a, b); ctx.FillRectangle(col, new Rect(a - new Point(3, 3), new Size(6, 6)));
+            Tag(ctx, MeasureText(dw), new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2 - 14), col);
         }
         if (area is { } ar)
         {
@@ -339,6 +362,7 @@ public sealed class Plan2D : Control
         }
         if (Mode == "point" && p != null && x >= 0 && z >= 0 && x < p.W && z < p.D) { PointPlaced?.Invoke(x, z); return; }
         if (Mode == "area") { area = (x, z, x, z); selecting = true; e.Pointer.Capture(this); InvalidateVisual(); return; }
+        if (Mode == "line") { draw = (x, z, x, z); drawing = true; e.Pointer.Capture(this); InvalidateVisual(); return; }
         dragFrom = pos; e.Pointer.Capture(this);
     }
 
@@ -346,6 +370,7 @@ public sealed class Plan2D : Control
     {
         base.OnPointerReleased(e); dragFrom = null; e.Pointer.Capture(null);
         if (measuring) { measuring = false; if (meas is { } m) MeasureChanged?.Invoke(MeasureText(m) + $"  ·  von X {p!.OriginX + m.x0} Z {p.OriginZ + m.z0} bis X {p.OriginX + m.x1} Z {p.OriginZ + m.z1}"); }
+        if (drawing && draw is { } dl) { drawing = false; draw = null; InvalidateVisual(); LineDrawn?.Invoke(dl.x0, dl.z0, dl.x1, dl.z1); }
         if (selecting && area is { } a) { selecting = false; area = null; InvalidateVisual(); AreaSelected?.Invoke(Math.Min(a.x0, a.x1), Math.Min(a.z0, a.z1), Math.Max(a.x0, a.x1), Math.Max(a.z0, a.z1)); }
     }
 
@@ -354,6 +379,16 @@ public sealed class Plan2D : Control
         base.OnPointerMoved(e); var pos = e.GetPosition(this);
         if (measuring && meas is { } m) { var (x, z) = CellAt(pos); meas = (m.x0, m.z0, x, z); InvalidateVisual(); return; }
         if (selecting && area is { } a) { var (x, z) = CellAt(pos); area = (a.x0, a.z0, x, z); InvalidateVisual(); return; }
+        if (drawing && draw is { } dl)
+        {   // Umschalt gedrückt: nur waagrecht, senkrecht oder genau diagonal
+            var (x, z) = CellAt(pos);
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                int dx = x - dl.x0, dz = z - dl.z0, ax = Math.Abs(dx), az = Math.Abs(dz);
+                if (ax > 2 * az) z = dl.z0; else if (az > 2 * ax) x = dl.x0; else { int mm = Math.Max(ax, az); x = dl.x0 + Math.Sign(dx) * mm; z = dl.z0 + Math.Sign(dz) * mm; }
+            }
+            draw = (dl.x0, dl.z0, x, z); InvalidateVisual(); return;
+        }
         if (dragFrom is { } f) { off += pos - f; dragFrom = pos; InvalidateVisual(); return; }
         if (p == null || topV == null) return;
         int cx = (int)Math.Floor((pos.X - off.X) / scale), cz = (int)Math.Floor((pos.Y - off.Y) / scale);
