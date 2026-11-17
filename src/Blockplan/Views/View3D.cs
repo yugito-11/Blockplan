@@ -260,14 +260,19 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         if (guides)
         {
             var V = new List<float>(); var I = new List<uint>();
+            var SV = new List<float>(); var SI = new List<uint>();
             if (showGuides && guidesPlan != null)
                 foreach (var g in guidesPlan.Guides.Where(g => g.On))
                 {
                     uint col; try { var c = Avalonia.Media.Color.Parse(g.Color); col = (uint)c.R << 16 | (uint)c.G << 8 | c.B; } catch { col = 0x7ee08f; }
+                    bool sel = g.Id == SelectedGuide;   // ausgewählt: kräftig und undurchsichtig
                     int t = Solid(col); float y0 = g.Y, y1 = g.Y + g.H;
-                    foreach (var (x, z) in g.Cells(p)) AddBox(V, I, x + ox, y0, z + oz, x + 1 + ox, y1, z + 1 + oz, t, 3);
+                    foreach (var (x, z) in g.Cells(p)) AddBox(sel ? SV : V, sel ? SI : I, x + ox, y0, z + oz, x + 1 + ox, y1, z + 1 + oz, t, 3);
                 }
-            lock (pending) pending.Add(("guides", V.Count > 0 ? new List<MeshChunk> { new() { V = V.ToArray(), I = I.ToArray(), Translucent = true } } : null));
+            var list = new List<MeshChunk>();
+            if (V.Count > 0) list.Add(new() { V = V.ToArray(), I = I.ToArray(), Translucent = true });
+            if (SV.Count > 0) list.Add(new() { V = SV.ToArray(), I = SI.ToArray() });
+            lock (pending) pending.Add(("guides", list.Count > 0 ? list : null));
         }
         QueueAtlas(atlas);
         RequestNextFrameRendering();
@@ -460,17 +465,39 @@ void main(){
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e); Focus();
-        var pp = e.GetCurrentPoint(this); dragFrom = pp.Position;
+        var pp = e.GetCurrentPoint(this); dragFrom = pp.Position; pressAt = pp.Position; moved = false;
         panning = pp.Properties.IsRightButtonPressed || pp.Properties.IsMiddleButtonPressed || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        guideDrag = false;
+        if (pp.Properties.IsLeftButtonPressed && !panning && !Fly && GuideAt(pp.Position) is { } hit)
+        {   // Hilfslinie anklicken = auswählen und mit der Maus verschieben
+            Select(hit.g.Id); guideDrag = hit.g.Type != "outline"; grabY = hit.y; grabCell = PlaneCell(pp.Position, grabY);
+        }
         e.Pointer.Capture(this); e.Handled = true;
     }
 
-    protected override void OnPointerReleased(PointerReleasedEventArgs e) { base.OnPointerReleased(e); dragFrom = null; e.Pointer.Capture(null); }
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e); e.Pointer.Capture(null);
+        if (guideDrag && moved && CurrentGuide() is { } g) GuideEdited?.Invoke(g, true);
+        else if (!guideDrag && !moved && SelectedGuide != null && dragFrom != null && GuideAt(e.GetPosition(this)) == null) Select(null);   // Klick ins Leere: Auswahl aufheben
+        guideDrag = false; dragFrom = null;
+    }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
         var pos = e.GetPosition(this);
+        if (dragFrom != null && pressAt is { } pa && (Math.Abs(pos.X - pa.X) > 3 || Math.Abs(pos.Y - pa.Y) > 3)) moved = true;
+        if (guideDrag && dragFrom != null)
+        {
+            if (PlaneCell(pos, grabY) is { } c && grabCell is { } c0 && c != c0 && CurrentGuide() is { } g)
+            {
+                int dx = c.x - c0.x, dz = c.z - c0.z; grabCell = c;
+                g.Cx += dx; g.Cz += dz; g.X2 += dx; g.Z2 += dz;
+                GuideEdited?.Invoke(g, false);
+            }
+            return;
+        }
         if (dragFrom is { } from)
         {
             var d = pos - from; dragFrom = pos;
@@ -506,6 +533,26 @@ void main(){
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (CurrentGuide() is { } sg)
+        {   // ausgewählte Hilfslinie: Bild↑/↓ = Höhe, +/− = Größe, Esc = fertig
+            int dy = e.Key == Key.PageUp ? 1 : e.Key == Key.PageDown ? -1 : 0;
+            int ds = e.Key is Key.OemPlus or Key.Add ? 1 : e.Key is Key.OemMinus or Key.Subtract ? -1 : 0;
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) { dy *= 5; ds *= 5; }
+            if (dy != 0) { sg.Y += dy; if (sg.Type == "outline" && project != null) sg.ComputeOutline(project); GuideEdited?.Invoke(sg, true); e.Handled = true; return; }
+            if (ds != 0 && sg.Type != "outline")
+            {
+                if (sg.Type == "line")
+                {   // Linie vom Start aus verlängern/verkürzen
+                    double lx = sg.X2 - sg.Cx, lz = sg.Z2 - sg.Cz, len = Math.Sqrt(lx * lx + lz * lz);
+                    if (len > 0) { double nl = Math.Max(1, len + ds); sg.X2 = Math.Round(sg.Cx + lx / len * nl); sg.Z2 = Math.Round(sg.Cz + lz / len * nl); }
+                }
+                else if (sg.Type == "grid") sg.A = Math.Max(2, sg.A + ds);
+                else { double k = (sg.A + 2 * ds) / Math.Max(1, sg.A); sg.A = Math.Max(1, sg.A + 2 * ds); sg.Bv = Math.Max(1, Math.Round(sg.Bv * k)); }
+                GuideEdited?.Invoke(sg, true); e.Handled = true; return;
+            }
+            if (e.Key == Key.Escape) { Select(null); e.Handled = true; return; }
+            if (e.Key == Key.Delete) { SelectedGuide = null; GuideDeleted?.Invoke(sg); GuideSelected?.Invoke(null); e.Handled = true; return; }
+        }
         if (e.Key == Key.F) { SetFly(!Fly); e.Handled = true; return; }
         if (e.Key == Key.Escape && Fly) { SetFly(false); e.Handled = true; return; }
         if (!moveKeys.Contains(e.Key)) return;
@@ -540,6 +587,78 @@ void main(){
     }
 
     KeyModifiers lastMods;
+
+    /* ---------- Hilfslinien in 3D bearbeiten ---------- */
+    public string? SelectedGuide { get; private set; }
+    /// <summary>Hilfslinie in 3D geändert; true = fertig (z. B. Maus losgelassen).</summary>
+    public event Action<Guide, bool>? GuideEdited;
+    public event Action<Guide?>? GuideSelected;
+    public event Action<Guide>? GuideDeleted;
+    bool guideDrag, moved; Point? pressAt; float grabY; (int x, int z)? grabCell;
+
+    Guide? CurrentGuide() => SelectedGuide == null ? null : guidesPlan?.Guides.FirstOrDefault(g => g.Id == SelectedGuide);
+
+    public void Select(string? id)
+    {
+        if (id == SelectedGuide) return;
+        SelectedGuide = id; RebuildExtras(true); GuideSelected?.Invoke(CurrentGuide());
+    }
+
+    /// <summary>Strahl unter der Maus in Projekt-Koordinaten.</summary>
+    (Vector3 o, Vector3 d)? Ray(Point pos)
+    {
+        var p = project; if (p == null || Bounds.Width < 1) return null;
+        if (!Matrix4x4.Invert(ViewProj((float)(Bounds.Width / Bounds.Height)), out var inv)) return null;
+        float nx = (float)(pos.X / Bounds.Width * 2 - 1), ny = (float)(1 - pos.Y / Bounds.Height * 2);
+        var a = Vector4.Transform(new Vector4(nx, ny, -1, 1), inv); var b = Vector4.Transform(new Vector4(nx, ny, 1, 1), inv);
+        var o = new Vector3(a.X, a.Y, a.Z) / a.W; var e2 = new Vector3(b.X, b.Y, b.Z) / b.W;
+        return (o + new Vector3(p.W / 2f, 0, p.D / 2f), Vector3.Normalize(e2 - o));
+    }
+
+    /// <summary>Feld, in dem der Strahl die waagrechte Ebene auf Höhe y trifft.</summary>
+    (int x, int z)? PlaneCell(Point pos, float y)
+    {
+        if (Ray(pos) is not { } r || Math.Abs(r.d.Y) < 1e-4f) return null;
+        float t = (y - r.o.Y) / r.d.Y; if (t <= 0) return null;
+        var q = r.o + r.d * t; return ((int)MathF.Floor(q.X), (int)MathF.Floor(q.Z));
+    }
+
+    /// <summary>Abstand zum ersten sichtbaren Block entlang des Strahls (Projekt-Koordinaten), höchstens bis lim.</summary>
+    float? BlockHit(Vector3 o, Vector3 dv, float lim)
+    {
+        var p = project; if (p == null) return null;
+        int maxY = Math.Min(top, p.H - 1); float t = 0, step = 0.1f;
+        while (t < lim)
+        {
+            var q = o + dv * t; int x = (int)MathF.Floor(q.X), y = (int)MathF.Floor(q.Y), z = (int)MathF.Floor(q.Z);
+            if (y >= 0 && y <= maxY && x >= 0 && z >= 0 && x < p.W && z < p.D && p.Cells[p.Index(x, y, z)] != 0) return t;
+            t += step; if (t > 20) step = 0.25f;
+        }
+        return null;
+    }
+
+    /// <summary>Nächste Hilfslinie unter der Maus (Raster ausgenommen, das liegt überall).</summary>
+    (Guide g, float y)? GuideAt(Point pos)
+    {
+        var p = project; if (p == null || !showGuides || guidesPlan == null || Ray(pos) is not { } r) return null;
+        Guide? best = null; float bt = float.MaxValue, by = 0;
+        var inv = new Vector3(1 / (r.d.X == 0 ? 1e-9f : r.d.X), 1 / (r.d.Y == 0 ? 1e-9f : r.d.Y), 1 / (r.d.Z == 0 ? 1e-9f : r.d.Z));
+        foreach (var g in guidesPlan.Guides.Where(g => g.On && g.Type != "grid"))
+        {
+            float y0 = g.Y, y1 = g.Y + g.H;
+            foreach (var (x, z) in g.Cells(p))
+            {   // Strahl gegen Quader (Slab-Test), etwas größer zum leichteren Treffen
+                float tx0 = (x - .15f - r.o.X) * inv.X, tx1 = (x + 1.15f - r.o.X) * inv.X;
+                float ty0 = (y0 - r.o.Y) * inv.Y, ty1 = (y1 - r.o.Y) * inv.Y;
+                float tz0 = (z - .15f - r.o.Z) * inv.Z, tz1 = (z + 1.15f - r.o.Z) * inv.Z;
+                float tmin = Math.Max(Math.Max(Math.Min(tx0, tx1), Math.Min(ty0, ty1)), Math.Min(tz0, tz1));
+                float tmax = Math.Min(Math.Min(Math.Max(tx0, tx1), Math.Max(ty0, ty1)), Math.Max(tz0, tz1));
+                if (tmax >= Math.Max(tmin, 0) && tmin < bt) { bt = Math.Max(tmin, 0); best = g; by = Math.Clamp(r.o.Y + r.d.Y * bt, y0, y1); }
+            }
+        }
+        if (best == null || BlockHit(r.o, r.d, bt) is { } tb && tb < bt - 0.5f) return null;   // Block davor: nicht anklickbar
+        return (best, by);
+    }
 
     /// <summary>Block unter der Maus: Strahl durch das Raster laufen lassen.</summary>
     void Pick(Point pos)

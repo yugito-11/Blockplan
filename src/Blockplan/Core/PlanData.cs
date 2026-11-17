@@ -113,11 +113,13 @@ public sealed class Guide : JItem
     /// <summary>Automatischer Umriss: Randfelder des Baus, gespeichert als "x,z;x,z;…".</summary>
     public string Pts { get => S("pts"); set => J["pts"] = value; }
     public bool Auto => Type is "outline" or "grid";
+    /// <summary>Umriss aus dem ganzen Bau (Draufsicht) statt nur aus den Ebenen Y … Y+H-1.</summary>
+    public bool AllLayers { get => B("all"); set => J["all"] = value; }
 
-    /// <summary>Umriss neu berechnen: alle Felder mit Blöcken in den Ebenen Y … Y+H-1, die an ein leeres Feld grenzen.</summary>
+    /// <summary>Umriss neu berechnen: alle Felder mit Blöcken (ganzer Bau oder Ebenen Y … Y+H-1), die an ein leeres Feld grenzen.</summary>
     public int ComputeOutline(Project p)
     {
-        int W = p.W, D = p.D, WD = W * D, y0 = Math.Max(0, Y), y1 = Math.Min(p.H, Y + H);
+        int W = p.W, D = p.D, WD = W * D, y0 = AllLayers ? 0 : Math.Max(0, Y), y1 = AllLayers ? p.H : Math.Min(p.H, Y + H);
         var fill = new bool[WD];
         for (int y = y0; y < y1; y++) { int b = y * WD; for (int c = 0; c < WD; c++) if (p.Cells[b + c] != 0) fill[c] = true; }
         var sb = new System.Text.StringBuilder(); int n = 0;
