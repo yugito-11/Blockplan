@@ -29,6 +29,14 @@ public sealed class MeshOptions
     public bool UseOffset; public float OffX, OffY, OffZ;
     /// <summary>Kennzeichen aller Flächen (3 = Hilfslinie/Farbe, sonst 0).</summary>
     public float Flag;
+    /// <summary>Bau-Anleitung: diese Ebene hervorheben (-1 = keine).</summary>
+    public int HighlightY = -1;
+    /// <summary>Schnitt: 0 aus, 1 entlang X (Nord-Süd-Schnitt), 2 entlang Z; sichtbar bleibt die Seite unter bzw. über ClipPos.</summary>
+    public int ClipAxis; public int ClipPos; public bool ClipKeepHigh;
+    /// <summary>Licht je Feld (Himmel*16 + Block, 0–255) für die Nachtansicht; null = überall Tageslicht.</summary>
+    public byte[]? Light;
+    /// <summary>Zeitraffer: diese Felder sind (noch) nicht gebaut und werden weggelassen.</summary>
+    public Func<long, bool>? Hidden;
 }
 
 /// <summary>
@@ -47,8 +55,11 @@ public static class Mesher
     sealed record Box(float X0, float Y0, float Z0, float X1, float Y1, float Z1);
     static readonly Box Full = new(0, 0, 0, 1, 1, 1);
     static readonly Box[] WaterTop = { new(0, 0, 0, 1, .875f, 1) };
-    /// <summary>Zahlen je Ecke: x, y, z, u, v, td (Kachel*8 + Richtung), Kennzeichen (0 normal, 1 fehlt, 2 falsch, 3 Farbe).</summary>
-    public const int Stride = 7;
+    /// <summary>Zahlen je Ecke: x, y, z, u, v, td (Kachel*8 + Richtung), Kennzeichen (0 normal, 1 fehlt, 2 falsch, 3 Farbe,
+    /// 4 hervorgehobene Ebene, 5 Spawn-Markierung), Licht (Himmel*16 + Block).</summary>
+    public const int Stride = 8;
+    /// <summary>Licht ohne Berechnung: voller Himmel, kein Blocklicht.</summary>
+    public const float DayLight = 240;
     static readonly float[] Unit = { 0, 1, 1, 1, 1, 0, 0, 0 };
 
     /// <summary>Kachel überwiegend halb durchsichtig (nicht nur Löcher wie bei Glas oder Laub)?</summary>
@@ -100,6 +111,8 @@ public static class Mesher
 
     /// <summary>Anzahl Bereiche (32×32 Spalten) eines Projekts und Bereich einer Spalte.</summary>
     public static int RegionsX(int w) => (w + R - 1) / R;
+    /// <summary>Helleres von zwei Lichtwerten, je Himmel und Block getrennt.</summary>
+    static float MaxL(int a, int b) => Math.Max(a & 0xF0, b & 0xF0) | Math.Max(a & 15, b & 15);
     public static int RegionOf(int w, int x, int z) => (z / R) * RegionsX(w) + x / R;
 
     public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default, MeshOptions? opt = null)
@@ -126,10 +139,17 @@ public static class Mesher
         int W0 = p.W, D0 = p.D, H = Math.Min(top, p.H - 1) + 1; long SY = (long)W0 * D0; var cells = p.Cells;
         float ox = opt?.UseOffset == true ? opt.OffX : -W0 / 2f, oz = opt?.UseOffset == true ? opt.OffZ : -D0 / 2f, offY = opt?.OffY ?? 0, baseFl = opt?.Flag ?? 0;
         var status = opt?.Status;
+        int hiY = opt?.HighlightY ?? -1, clipAxis = opt?.ClipAxis ?? 0, clipPos = opt?.ClipPos ?? 0; bool clipHigh = opt?.ClipKeepHigh ?? false;
+        var light = opt?.Light; var hidden = opt?.Hidden;
+        // Schnitt: Spalten auf der weggeschnittenen Seite gibt es nicht
+        bool Vis(int x, int z) { if (clipAxis == 0) return true; int c = clipAxis == 1 ? x : z; return clipHigh ? c >= clipPos : c <= clipPos; }
+        bool VisI(long i) => (clipAxis == 0 || Vis((int)(i % W0), (int)(i / W0 % D0))) && (hidden == null || !hidden(i));
+        // Licht eines Feldes (außerhalb: Himmel)
+        int Lt(long i, bool inb) => !inb ? 240 : light == null ? 240 : light[i];
         // Baufortschritt: fehlende oder falsche Blöcke verdecken nichts (sie werden durchscheinend gezeigt)
         byte St(long i) { int x = (int)(i % W0), z = (int)(i / W0 % D0), y = (int)(i / SY); return status!(x, y, z, cells[i]); }
         bool Ghost(long i) => status != null && cells[i] != 0 && St(i) is 2 or 3;
-        bool Opaque(long i) => opq[cells[i]] && (status == null || !Ghost(i));
+        bool Opaque(long i) => opq[cells[i]] && (status == null || !Ghost(i)) && ((clipAxis == 0 && hidden == null) || VisI(i));
         var regs = new List<(int x0, int z0)>(); int rx = RegionsX(W0);
         for (int z0 = 0; z0 < D0; z0 += R) for (int x0 = 0; x0 < W0; x0 += R) regs.Add((x0, z0));
         var todoR = opt?.Regions != null ? opt.Regions.Where(r => r >= 0 && r < regs.Count).ToList() : Enumerable.Range(0, regs.Count).ToList();
@@ -141,12 +161,13 @@ public static class Mesher
             int W = Math.Min(R, W0 - x0), D = Math.Min(R, D0 - z0); int nn = W * D * H;
             var cv = new ushort[nn]; var ex = new byte[nn]; bool any = false;
             var Vo = new List<float>(); var Io = new List<uint>(); var Vt = new List<float>(); var It = new List<uint>();
-            bool curT = false; float curFl = baseFl;
+            bool curT = false; float curFl = baseFl, curL = DayLight;
+            var lx = light == null ? null : new byte[nn * 6];   // Licht je Fläche der vollen Würfel (für das Zusammenfassen)
             void Quad(float[] c, float[] uv, int td, bool flip)
             {
                 var V = curT ? Vt : Vo; var I = curT ? It : Io;
                 uint b0 = (uint)(V.Count / Stride);
-                for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1] + offY); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(td); V.Add(curFl); }
+                for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1] + offY); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(td); V.Add(curFl); V.Add(curL); }
                 if (flip) { I.Add(b0); I.Add(b0 + 2); I.Add(b0 + 1); I.Add(b0); I.Add(b0 + 3); I.Add(b0 + 2); }
                 else { I.Add(b0); I.Add(b0 + 1); I.Add(b0 + 2); I.Add(b0); I.Add(b0 + 2); I.Add(b0 + 3); }
             }
@@ -158,6 +179,18 @@ public static class Mesher
                 {
                     int v = cells[i]; if (v == 0) continue; int k = kind[v]; if (k == 0) continue;
                     int gx = x0 + x;
+                    if (clipAxis != 0 && !Vis(gx, gz)) continue;
+                    if (hidden != null && hidden(i)) continue;
+                    float cellFl = y == hiY ? 4 : baseFl; curFl = cellFl;
+                    // Licht: eigenes Feld (für Modelle und Teilblöcke) bzw. das hellste Nachbarfeld
+                    if (light != null)
+                    {
+                        int own = light[i], best = own;
+                        if (gx + 1 < W0) best = Math.Max(best, light[i + 1]); if (gx > 0) best = Math.Max(best, light[i - 1]);
+                        if (y + 1 < H) best = Math.Max(best, light[i + SY]); else best = Math.Max(best, 240);
+                        if (gz + 1 < D0) best = Math.Max(best, light[i + W0]); if (gz > 0) best = Math.Max(best, light[i - W0]);
+                        curL = k == 1 ? MaxL(best, own) : MaxL(own, best & 0xF0);
+                    }
                     // Nachbarn: undurchsichtig? / gleicher Block?
                     bool nPX = gx + 1 < W0 && Opaque(i + 1), nNX = gx > 0 && Opaque(i - 1);
                     bool nPY = y + 1 < H && Opaque(i + SY), nNY = y > 0 && Opaque(i - SY);
@@ -176,7 +209,7 @@ public static class Mesher
                             if (!nNY && !G(i - SY, y > 0)) Quad(new[] { X0, Y0, Z0, X1, Y0, Z0, X1, Y0, Z1, X0, Y0, Z1 }, Unit, gf[3] * 8 + 3, false);
                             if (!nPZ && !G(i + W0, gz + 1 < D0)) Quad(new[] { X0, Y0, Z1, X1, Y0, Z1, X1, Y1, Z1, X0, Y1, Z1 }, Unit, gf[4] * 8 + 4, false);
                             if (!nNZ && !G(i - W0, gz > 0)) Quad(new[] { X0, Y0, Z0, X1, Y0, Z0, X1, Y1, Z0, X0, Y1, Z0 }, Unit, gf[5] * 8 + 5, true);
-                            curFl = baseFl; any = true; continue;
+                            curFl = cellFl; any = true; continue;
                         }
                     }
                     if (k == 5)
@@ -207,7 +240,16 @@ public static class Mesher
                     if (k == 1)
                     {
                         int bits = (nPX ? 0 : 1) | (nNX ? 0 : 2) | (nPY ? 0 : 4) | (nNY ? 0 : 8) | (nPZ ? 0 : 16) | (nNZ ? 0 : 32);
-                        if (bits != 0) { cv[li] = (ushort)v; ex[li] = (byte)bits; any = true; }
+                        if (bits != 0)
+                        {
+                            cv[li] = (ushort)v; ex[li] = (byte)bits; any = true;
+                            if (lx != null)
+                            {   // Licht der Fläche = Licht im Feld davor
+                                lx[li * 6 + 0] = (byte)Lt(i + 1, gx + 1 < W0); lx[li * 6 + 1] = (byte)Lt(i - 1, gx > 0);
+                                lx[li * 6 + 2] = (byte)Lt(i + SY, y + 1 < H); lx[li * 6 + 3] = (byte)Lt(i - SY, y > 0);
+                                lx[li * 6 + 4] = (byte)Lt(i + W0, gz + 1 < D0); lx[li * 6 + 5] = (byte)Lt(i - W0, gz > 0);
+                            }
+                        }
                         continue;
                     }
                     float bx = gx + ox, bz = gz + oz;
@@ -220,7 +262,7 @@ public static class Mesher
                         any = true; continue;
                     }
                     var f = ft[v]; int bv = bas[v]; curT = trans[v];
-                    bool Same(long j, bool inb) => inb && bas[cells[j]] == bv && kind[cells[j]] == 2 && boxes[cells[j]].Length == 1 && boxes[cells[j]][0] == Full;
+                    bool Same(long j, bool inb) => inb && VisI(j) && bas[cells[j]] == bv && kind[cells[j]] == 2 && boxes[cells[j]].Length == 1 && boxes[cells[j]][0] == Full;
                     bool isFull = boxes[v].Length == 1 && boxes[v][0] == Full;
                     var bxs = boxes[v];
                     // Wasseroberfläche liegt wie im Spiel etwas tiefer, wenn darüber kein Wasser ist
@@ -256,7 +298,22 @@ public static class Mesher
                 for (int sl = 0; sl < dims[na]; sl++)
                 {
                     bool has = false; c[na] = sl;
-                    for (int vv = 0; vv < NV; vv++) { c[va] = vv; for (int uu = 0; uu < NU; uu++) { c[ua] = uu; int li = (c[1] * D + c[2]) * W + c[0]; int m = (ex[li] & bit) != 0 ? ft[cv[li]][d] + 1 : 0; mask[vv * NU + uu] = m; if (m != 0) has = true; } }
+                    for (int vv = 0; vv < NV; vv++)
+                    {
+                        c[va] = vv;
+                        for (int uu = 0; uu < NU; uu++)
+                        {
+                            c[ua] = uu; int li = (c[1] * D + c[2]) * W + c[0];
+                            int m = 0;
+                            if ((ex[li] & bit) != 0)
+                            {   // Schlüssel: Kachel, hervorgehobene Ebene, Licht – nur Gleiches wird zusammengefasst
+                                m = ft[cv[li]][d] + 1;
+                                if (c[1] == hiY) m |= 1 << 16;
+                                if (lx != null) m |= lx[li * 6 + d] << 17;
+                            }
+                            mask[vv * NU + uu] = m; if (m != 0) has = true;
+                        }
+                    }
                     if (!has) continue;
                     for (int vv = 0; vv < NV; vv++)
                         for (int uu = 0; uu < NU;)
@@ -274,7 +331,8 @@ public static class Mesher
                                 cs[e * 3] = x0 + qq[0] + ox; cs[e * 3 + 1] = qq[1]; cs[e * 3 + 2] = z0 + qq[2] + oz;
                                 uv[e * 2] = du[e, 0]; uv[e * 2 + 1] = du[e, 1];
                             }
-                            Quad(cs, uv, (k - 1) * 8 + d, d == 0 || d == 2 || d == 5);
+                            curFl = (k & (1 << 16)) != 0 ? 4 : baseFl; curL = lx != null ? (k >> 17) & 0xFF : DayLight;
+                            Quad(cs, uv, ((k & 0xFFFF) - 1) * 8 + d, d == 0 || d == 2 || d == 5);
                             uu += w;
                         }
                 }

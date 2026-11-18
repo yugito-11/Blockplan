@@ -268,6 +268,22 @@ public sealed class PlanData
         return (c?.Name ?? "Bauteil") + " " + t.No + (t.Sub.Length > 0 ? " · " + t.Sub : "");
     }
 
+    /// <summary>Blöcke eines oder mehrerer Baupläne, nach Blockzustand gezählt (für die Umrechnung in Items).</summary>
+    public Dictionary<int, long> States(IEnumerable<Part> parts)
+    {
+        var r = new Dictionary<int, long>();
+        foreach (var t in parts)
+        {
+            var b = t.Box; var m = t.Mask; int w = b[3] - b[0] + 1, d = b[5] - b[2] + 1, h = b[4] - b[1] + 1;
+            for (int y = 0; y < h; y++) for (int z = 0; z < d; z++) for (int x = 0; x < w; x++)
+            {
+                long mi = ((long)y * d + z) * w + x; if (mi >= m.LongLength || m[mi] == 0) continue;
+                int v = p.At(b[0] + x, b[1] + y, b[2] + z); if (v != 0) r[v] = r.GetValueOrDefault(v) + 1;
+            }
+        }
+        return r;
+    }
+
     /// <summary>Blöcke eines oder mehrerer Baupläne, nach Grundblock gezählt.</summary>
     public Dictionary<int, long> Material(IEnumerable<Part> parts)
     {

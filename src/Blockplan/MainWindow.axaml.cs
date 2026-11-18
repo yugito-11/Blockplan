@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -23,8 +24,20 @@ public sealed class MatRow
     public required string Name { get; init; }
     public long Count { get; init; }
     public string CountText => Count.ToString("N0");
-    public string StackText => Count >= 64 ? (Count >= 1728 ? $"{Count / 1728.0:0.#} Shulker" : $"{Count / 64} Stacks{(Count % 64 > 0 ? " + " + Count % 64 : "")}") : "";
+    public string StackText { get; init; } = "";
     public Bitmap? Icon { get; init; }
+    /// <summary>Grundblock (für „Ersetzen“); 0 = Item ohne eigenen Block.</summary>
+    public int Block { get; init; }
+    public bool CanReplace => Replace != null;
+    public System.Windows.Input.ICommand? Replace { get; init; }
+}
+
+/// <summary>Kleiner Befehl für Knöpfe in Listen.</summary>
+public sealed class Cmd(Action run) : System.Windows.Input.ICommand
+{
+    public event EventHandler? CanExecuteChanged { add { } remove { } }
+    public bool CanExecute(object? p) => true;
+    public void Execute(object? p) => run();
 }
 
 public partial class MainWindow : Window
@@ -58,6 +71,11 @@ public partial class MainWindow : Window
         ProjName.LostFocus += (_, _) => { if (project != null && !loadingUi && ProjName.Text is { Length: > 0 } t && t != project.Name) { project.Name = t; SaveProject(); RefreshList(); } };
         foreach (var n in new[] { OrX, OrY, OrZ }) n.ValueChanged += (_, _) => { if (project == null || loadingUi) return; project.OriginX = (int)(OrX.Value ?? 0); project.OriginY = (int)(OrY.Value ?? 64); project.OriginZ = (int)(OrZ.Value ?? 0); SaveProject(); };
         MatSearch.TextChanged += (_, _) => FilterMat();
+        MatScope.SelectionChanged += (_, _) => { if (!matScopeBusy && MatPage.IsVisible) BuildMaterials(); };
+        MatMode.SelectionChanged += (_, _) => { if (MatPage.IsVisible) BuildMaterials(); };
+        BtnMatCopy.Click += async (_, _) => await CopyMaterials();
+        BtnExport.Click += async (_, _) => await ExportSchem();
+        BtnUndo.Click += async (_, _) => await UndoReplace();
         Plan.Hover += ShowHover; View3.Hover += ShowHover;
         FlyBtn.Click += (_, _) => { View3.SetFly(FlyBtn.IsChecked == true); View3.Focus(); };
         View3.FlyChanged += on => { FlyBtn.IsChecked = on; ShowTab(1); };
@@ -69,13 +87,215 @@ public partial class MainWindow : Window
         AddHandler(DragDrop.DropEvent, OnDrop); DragDrop.SetAllowDrop(this, true);
         KeyDown += (_, e) =>
         {
+            if (project != null && tab == 1 && StepBtn.IsChecked == true && e.Key is Avalonia.Input.Key.PageUp or Avalonia.Input.Key.PageDown)
+            { StepBy(e.Key == Avalonia.Input.Key.PageUp ? 1 : -1); e.Handled = true; return; }
             if (project == null || !ModeLayer.IsChecked == true) return;
             if (e.Key == Avalonia.Input.Key.PageUp) LayerSlider.Value = Math.Min(LayerSlider.Maximum, LayerSlider.Value + 1);
             if (e.Key == Avalonia.Input.Key.PageDown) LayerSlider.Value = Math.Max(0, LayerSlider.Value - 1);
         };
-        InitPlanning(); InitLive();
+        InitPlanning(); InitLive(); Init3DTools(); InitNavAndTimelapse();
         Opened += async (_, _) => await Startup();
         Closing += (_, _) => store.Dispose();
+    }
+
+    /* ---------- 3D-Werkzeuge: Bau-Anleitung, Schnitt, Nacht ---------- */
+    long[] layerCount = Array.Empty<long>();
+    DispatcherTimer? stepTimer, cutTimer;
+
+    void Init3DTools()
+    {
+        StepBtn.Click += (_, _) => SetStepMode(StepBtn.IsChecked == true);
+        StepFirst.Click += (_, _) => StepTo(FirstLayer());
+        StepLast.Click += (_, _) => { StepPlay.IsChecked = false; StepTo(LastLayer()); };
+        StepPrev.Click += (_, _) => StepBy(-1); StepNext.Click += (_, _) => StepBy(1);
+        StepPlay.Click += (_, _) =>
+        {
+            stepTimer?.Stop();
+            if (StepPlay.IsChecked != true) { StepPlay.Content = "▶ Abspielen"; return; }
+            StepPlay.Content = "⏸ Pause";
+            if ((int)CutSlider.Value >= LastLayer()) StepTo(FirstLayer());
+            stepTimer = new DispatcherTimer(TimeSpan.FromSeconds(StepSpeed.Value), DispatcherPriority.Background, (_, _) =>
+            {
+                if ((int)CutSlider.Value >= LastLayer()) { StepPlay.IsChecked = false; StepPlay.Content = "▶ Abspielen"; stepTimer!.Stop(); return; }
+                StepBy(1);
+            });
+            stepTimer.Start();
+        };
+        StepSpeed.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty && stepTimer != null) stepTimer.Interval = TimeSpan.FromSeconds(StepSpeed.Value); };
+        ToolTip.SetTip(StepSpeed, "Geschwindigkeit beim Abspielen");
+
+        CutAxis.SelectionChanged += (_, _) =>
+        {
+            if (project == null) return;
+            int ax = CutAxis.SelectedIndex; bool on = ax > 0;
+            CutPos.IsVisible = CutPosRow.IsVisible = CutOther.IsVisible = on;
+            if (on) { loadingUi = true; CutPos.Maximum = Math.Max(1, (ax == 1 ? project.W : project.D) - 1); CutPos.Value = CutPos.Maximum / 2; loadingUi = false; }
+            ApplyCut();
+        };
+        CutPos.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty && !loadingUi) { CutPosText(); cutTimer?.Stop(); cutTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(140), DispatcherPriority.Background, (_, _) => { cutTimer!.Stop(); ApplyCut(); }); cutTimer.Start(); } };
+        CutOther.IsCheckedChanged += (_, _) => ApplyCut();
+
+        NightBtn.Click += (_, _) =>
+        {
+            bool on = NightBtn.IsChecked == true; SpawnChk.IsVisible = on; LightInfo.Text = on ? "Berechne Licht …" : "";
+            View3.SetNight(on, SpawnChk.IsChecked == true);
+        };
+        SpawnChk.IsCheckedChanged += (_, _) => { View3.ShowSpawns(SpawnChk.IsChecked == true); UpdateLightInfo(); };
+        View3.LightReady += UpdateLightInfo;
+
+        WalkBtn.Click += (_, _) => { View3.SetWalk(WalkBtn.IsChecked == true); View3.Focus(); };
+        View3.WalkChanged += on =>
+        {
+            WalkBtn.IsChecked = on; if (on) { FlyBtn.IsChecked = false; ShowTab(1); }
+            ViewHint.Text = on ? "Laufen: WASD = gehen · Maus ziehen = umsehen · Leertaste = springen · Strg = rennen · Umschalt = schleichen · an Leitern: W = hoch · G oder Esc = beenden"
+                               : "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen · F = Flugmodus · G = Laufen · Hilfslinie anklicken = bearbeiten";
+            if (!on) ShowHover("");
+        };
+        View3.WalkMoved += () => ShowHover("Du stehst bei " + View3.WalkPos);
+        PhotoBtn.Click += async (_, _) => await TakePhoto();
+    }
+
+    async Task TakePhoto()
+    {
+        if (project == null) return;
+        var w = new Window { Title = "Foto", Width = 420, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var size = new ComboBox { HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, SelectedIndex = 1, ItemsSource = new[] { "Wie das Fenster (doppelt scharf)", "Full HD – 1920 × 1080", "4K – 3840 × 2160", "Quadratisch – 2048 × 2048" } };
+        var time = new ComboBox { HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, SelectedIndex = 1, ItemsSource = new[] { "Wie die Ansicht", "Mittag (Sonne von oben)", "Abendsonne", "Nacht (mit Fackellicht)" } };
+        var fog = new CheckBox { Content = "Dunst in der Ferne", IsChecked = false };
+        var guides = new CheckBox { Content = "Hilfslinien mit aufs Bild", IsChecked = false };
+        var players = new CheckBox { Content = "Spieler mit aufs Bild", IsChecked = true };
+        var ok = new Button { Content = "Aufnehmen …", Classes = { "accent" }, MinWidth = 110, IsDefault = true }; var cancel = new Button { Content = "Abbrechen", MinWidth = 90, IsCancel = true };
+        bool go = false; ok.Click += (_, _) => { go = true; w.Close(); }; cancel.Click += (_, _) => w.Close();
+        w.Content = new StackPanel
+        {
+            Margin = new Thickness(22), Spacing = 10, Children =
+            {
+                new TextBlock { Text = "Foto vom Bau", FontSize = 17, FontWeight = FontWeight.SemiBold },
+                new TextBlock { Text = "Das Bild zeigt genau den Ausschnitt der 3D-Ansicht. Richte vorher die Kamera aus.", Classes = { "note" }, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = "Größe", Classes = { "note" } }, size,
+                new TextBlock { Text = "Licht", Classes = { "note" } }, time,
+                fog, guides, players,
+                new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Children = { cancel, ok } },
+            }
+        };
+        await w.ShowDialog(this);
+        if (!go) return;
+        double sc = RenderScaling;
+        var (pw, ph) = size.SelectedIndex switch
+        {
+            0 => ((int)(View3.Bounds.Width * sc * 2), (int)(View3.Bounds.Height * sc * 2)),
+            2 => (3840, 2160), 3 => (2048, 2048), _ => (1920, 1080),
+        };
+        var pt = time.SelectedIndex switch { 0 => View3D.PhotoTime.AsView, 2 => View3D.PhotoTime.Evening, 3 => View3D.PhotoTime.Night, _ => View3D.PhotoTime.Noon };
+        if (pt == View3D.PhotoTime.Night && !View3.Night)
+        {   // Licht erst berechnen
+            NightBtn.IsChecked = true; SpawnChk.IsVisible = true; View3.SetNight(true, false); SpawnChk.IsChecked = false;
+            var tcs = new TaskCompletionSource(); void Done() { tcs.TrySetResult(); } View3.LightReady += Done;
+            Busy("Berechne Licht …"); await Task.WhenAny(tcs.Task, Task.Delay(60000)); View3.LightReady -= Done; await Task.Delay(800);
+        }
+        Busy("Nehme das Foto auf …");
+        var shot = await View3.CapturePhoto(new View3D.PhotoOptions(pw, ph, pt, fog.IsChecked == true, guides.IsChecked == true, players.IsChecked == true));
+        Busy(null);
+        if (shot is not { } img) { await Message("Foto nicht möglich", "Die Grafikkarte konnte das Bild in dieser Größe nicht zeichnen. Versuch eine kleinere Größe."); return; }
+        if (Environment.GetEnvironmentVariable("BLOCKPLAN_PHOTO") is { Length: > 0 } testPath) { await Task.Run(() => SavePng(testPath, img.rgba, img.w, img.h)); return; }   // zum Testen
+        var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Foto speichern", SuggestedFileName = string.Join("_", project.Name.Split(Path.GetInvalidFileNameChars())) + ".png", DefaultExtension = "png",
+            FileTypeChoices = new[] { new FilePickerFileType("PNG-Bild") { Patterns = new[] { "*.png" } } },
+        });
+        if (f == null || f.TryGetLocalPath() is not { } path) return;
+        await Task.Run(() => SavePng(path, img.rgba, img.w, img.h));
+        ShowHover($"Foto gespeichert: {Path.GetFileName(path)} ({img.w} × {img.h})");
+    }
+
+    internal static void SavePng(string path, byte[] rgba, int w, int h)
+    {
+        var info = new SkiaSharp.SKImageInfo(w, h, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul);
+        using var bm = new SkiaSharp.SKBitmap(info);
+        System.Runtime.InteropServices.Marshal.Copy(rgba, 0, bm.GetPixels(), rgba.Length);
+        using var data = bm.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+        using var fs = File.Create(path); data.SaveTo(fs);
+    }
+
+    void UpdateLightInfo()
+    {
+        if (!View3.Night) { LightInfo.Text = ""; return; }
+        int n = View3.SpawnCount;
+        LightInfo.Text = SpawnChk.IsChecked != true ? "" : n == 0 ? "Überall hell genug ✓" : $"{n:N0}{(n >= 200_000 ? "+" : "")} dunkle Stellen";
+        ToolTip.SetTip(LightInfo, n == 0 ? "Keine Stelle im Bau, an der nachts Monster erscheinen können." : "An den roten Kreuzen ist es so dunkel (Blocklicht 0), dass dort nachts Monster erscheinen können. Fackeln oder Laternen helfen.");
+    }
+
+    void CutPosText()
+    {
+        if (project == null) return; int ax = CutAxis.SelectedIndex, pos = (int)CutPos.Value;
+        CutPosVal.Text = ax == 1 ? $"X {project.OriginX + pos}" : ax == 2 ? $"Z {project.OriginZ + pos}" : "";
+    }
+
+    void ApplyCut()
+    {
+        if (project == null) return;
+        CutPosText();
+        View3.SetClip(CutAxis.SelectedIndex, (int)CutPos.Value, CutOther.IsChecked == true);
+    }
+
+    void ComputeLayerCounts()
+    {
+        var p = project; if (p == null) { layerCount = Array.Empty<long>(); return; }
+        long WD = (long)p.W * p.D; var lc = new long[p.H];
+        for (int y = 0; y < p.H; y++) { long n = 0, b = y * WD; for (long i = 0; i < WD; i++) if (p.Cells[b + i] != 0) n++; lc[y] = n; }
+        layerCount = lc;
+    }
+    int FirstLayer() { for (int y = 0; y < layerCount.Length; y++) if (layerCount[y] > 0) return y; return 0; }
+    int LastLayer() { for (int y = layerCount.Length - 1; y >= 0; y--) if (layerCount[y] > 0) return y; return 0; }
+
+    void SetStepMode(bool on)
+    {
+        if (project == null) { StepBtn.IsChecked = false; return; }
+        StepBar.IsVisible = on && tab == 1;
+        if (!on) { stepTimer?.Stop(); StepPlay.IsChecked = false; StepPlay.Content = "▶ Abspielen"; CutSlider.Value = CutSlider.Maximum; ApplyView(); return; }
+        if (layerCount.Length != project.H) ComputeLayerCounts();
+        StepTo(FirstLayer());
+    }
+
+    void StepBy(int d)
+    {
+        if (project == null || layerCount.Length == 0) return;
+        int y = (int)CutSlider.Value + d;
+        while (y > 0 && y < layerCount.Length - 1 && layerCount[y] == 0) y += d;   // leere Ebenen überspringen
+        StepTo(Math.Clamp(y, FirstLayer(), LastLayer()));
+    }
+
+    void StepTo(int y)
+    {
+        CutSlider.Value = y;
+        if (!loadingUi) LayerSlider.Value = y;   // 2D-Plan zeigt dieselbe Ebene
+        ApplyView();
+    }
+
+    void UpdateStepUi()
+    {
+        var p = project; if (p == null) return;
+        if (layerCount.Length != p.H) ComputeLayerCounts();
+        int y = (int)CutSlider.Value, first = FirstLayer(), last = LastLayer();
+        int idx = 0, total = 0; for (int k = 0; k < layerCount.Length; k++) if (layerCount[k] > 0) { total++; if (k <= y) idx++; }
+        StepText.Text = $"Ebene {idx} von {total} · Y {p.OriginY + y} · {(y < layerCount.Length ? layerCount[y] : 0):N0} Blöcke";
+        StepPrev.IsEnabled = StepFirst.IsEnabled = y > first; StepNext.IsEnabled = y < last;
+        // Material dieser Ebene (als Items)
+        var st = new Dictionary<int, long>(); long WD = (long)p.W * p.D, b = y * WD;
+        if (y < p.H) for (long i = 0; i < WD; i++) { int v = p.Cells[b + i]; if (v != 0) st[v] = st.GetValueOrDefault(v) + 1; }
+        var from = new Dictionary<string, int>(); foreach (var v in st.Keys) foreach (var (it, _) in Items.Of(v)) from.TryAdd(it, Blocks.BaseOf(v));
+        StepMat.Children.Clear();
+        var items = Items.FromStates(st).OrderByDescending(kv => kv.Value).ToList();
+        foreach (var (it, n) in items.Take(14))
+        {
+            int src = from.GetValueOrDefault(it); var img = new Image { Width = 18, Height = 18, Source = MatIcon(Items.BlockFor(it, src)) };
+            RenderOptions.SetBitmapInterpolationMode(img, BitmapInterpolationMode.None);
+            var chip = new Border { Background = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)), CornerRadius = new CornerRadius(6), Padding = new Thickness(6, 2), Margin = new Thickness(0, 0, 6, 4),
+                Child = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 5, Children = { img, new TextBlock { Text = $"{n:N0} {ItemName(it, src)}", Foreground = Brushes.White, FontSize = 11.5, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center } } } };
+            ToolTip.SetTip(chip, Items.StackText(it, n) is { Length: > 0 } stx ? stx : $"{n} Stück");
+            StepMat.Children.Add(chip);
+        }
+        if (items.Count > 14) StepMat.Children.Add(new TextBlock { Text = $"+ {items.Count - 14} weitere", Foreground = Brushes.White, FontSize = 11.5, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
     }
 
     void ShowHover(string s) { HoverText.Text = s; HoverBox.IsVisible = s.Length > 0; }
@@ -88,6 +308,8 @@ public partial class MainWindow : Window
         Plan.IsVisible = t == 0; View3.IsVisible = t == 1; MatPage.IsVisible = t == 2; PartsHost.IsVisible = t == 3; StagesHost.IsVisible = t == 4; TodosHost.IsVisible = t == 5;
         HoverBox.IsVisible = false; MeasureBox.IsVisible = t == 0 && MeasureText.Text?.Length > 0;
         Bar3D.IsVisible = t == 1; if (t == 1) Dispatcher.UIThread.Post(() => View3.Focus());
+        TimeBar.IsVisible = t == 1 && tlOpen;
+        StepBar.IsVisible = t == 1 && StepBtn.IsChecked == true; CutCard.IsVisible = t == 1;
         StatusBox.IsVisible = t == 1 && StatusText.Text?.Length > 0;
         ModeRow.IsVisible = t == 0; LayerRow.IsVisible = t == 0 && ModeLayer.IsChecked == true;
         ToolsCard.IsVisible = t == 0; GuidesCard.IsVisible = t is 0 or 1; LiveCard.IsVisible = t is 0 or 1;
@@ -96,13 +318,13 @@ public partial class MainWindow : Window
             0 => "Ziehen = verschieben · Mausrad = zoomen · rechte Maustaste ziehen = messen · Bild auf/ab = Schicht wechseln",
             1 => View3.Fly
                 ? "Flugmodus: WASD = fliegen · Leertaste/C = hoch/runter · Maus ziehen = umsehen · Umschalt = schneller · F oder Esc = beenden"
-                : "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen · F = Flugmodus · Hilfslinie anklicken = bearbeiten",
+                : "Links ziehen = drehen · Rechts ziehen = verschieben · Mausrad = zoomen · WASD, Leertaste, C = bewegen · F = Flugmodus · G = Laufen · Hilfslinie anklicken = bearbeiten",
             2 => "Alle Blöcke bis zur eingestellten Höhe, sortiert nach Menge.",
             3 => "Baupläne sind Teile deines Baus. Neue erstellst du im 2D-Plan mit „Bauplan aus Bereich“.",
             4 => "Etappen fassen Baupläne zu Bauabschnitten zusammen, mit Material je Abschnitt.",
             _ => "Aufgaben fürs Team, auf Wunsch mit Bezug zu einer Etappe oder einem Bauplan.",
         };
-        if (t == 2) BuildMaterials();
+        if (t == 2) { FillMatScopes(); BuildMaterials(); }
         if (t == 3) partsPage.Refresh(); if (t == 4) stagesPage.Refresh(); if (t == 5) todosPage.Refresh();
     }
 
@@ -134,11 +356,11 @@ public partial class MainWindow : Window
     {
         LiveLink.Text = store.Get("liveLink") ?? "";
         BtnLive.Click += (_, _) => ConnectLive();
-        BtnLiveStop.Click += (_, _) => { live?.Stop(); live = null; Plan.Live = null; View3.SetLive(null, false, false); Plan.LiveReset(); UpdateLiveUi(); };
+        BtnLiveStop.Click += (_, _) => { recorder?.Flush(); recorder = null; live?.Stop(); live = null; Plan.Live = null; View3.SetLive(null, false, false); Plan.LiveReset(); UpdateLiveUi(); };
         LiveProgChk.IsCheckedChanged += (_, _) => ApplyLiveView();
         LiveSurrChk.IsCheckedChanged += (_, _) => ApplyLiveView();
         Guides3DChk.IsCheckedChanged += (_, _) => View3.SetGuides(plan, Guides3DChk.IsChecked == true);
-        Closing += (_, _) => live?.Dispose();
+        Closing += (_, _) => { lock (recLock) recorder?.Flush(); live?.Dispose(); };
     }
 
     void ConnectLive()
@@ -159,12 +381,14 @@ public partial class MainWindow : Window
             {
                 if (live == null) return;
                 var (all, cells, chunks) = live.TakeChanges();
-                View3.LiveChanged(all, cells, chunks); Plan.LiveChanged(chunks);
-                if (all) Plan.LiveReset();
-                UpdateProgress();
+                if (tlOpen) { if (all) Plan.LiveReset(); Plan.LiveChanged(chunks); }
+                else { View3.LiveChanged(all, cells, chunks); Plan.LiveChanged(chunks); if (all) Plan.LiveReset(); }
+                UpdateProgress(); Record(all, cells);
             });
         }
         live.Connect(link, project);
+        recorder?.Flush(); recorder = null;
+        var rp = project; Task.Run(() => { var r = new TimelapseRecorder(store, rp); Dispatcher.UIThread.Post(() => { if (project == rp) { recorder = r; UpdateTlInfo(); } }); });
         Plan.Live = live; ApplyLiveView(); UpdateLiveUi();
     }
 
@@ -186,6 +410,7 @@ public partial class MainWindow : Window
         };
         LiveDot.Background = new SolidColorBrush(st switch { "live" => Color.Parse("#5fc27e"), "fehler" => Color.Parse("#ec6f66"), "aus" => Colors.Gray, _ => Color.Parse("#dc9a52") });
         BtnLiveStop.IsEnabled = live != null && st != "aus"; BtnLive.Content = live != null && st != "aus" ? "Neu verbinden" : "Verbinden";
+        NavBox.IsVisible = live != null && live.Known;
         RenderLivePlayers();
     }
 
@@ -237,6 +462,194 @@ public partial class MainWindow : Window
                 LiveProgress.Text = n == 0 ? "" : $"{ok:N0} von {n:N0} gesetzt ({(double)ok / n:P0})" + (bad > 0 ? $" · {bad:N0} falsch" : "") + (unk > 0 ? $" · {unk:N0} noch nicht gelesen" : "");
             });
         });
+    }
+
+    /* ---------- Was fehlt noch? (Navigator) ---------- */
+    List<MissingSpot> navSpots = new(); int navIdx;
+
+    void InitNavAndTimelapse()
+    {
+        BtnNavFind.Click += async (_, _) => await FindMissing();
+        BtnNavPrev.Click += (_, _) => { if (navSpots.Count > 0) { navIdx = (navIdx - 1 + navSpots.Count) % navSpots.Count; ShowSpot(); } };
+        BtnNavNext.Click += (_, _) => { if (navSpots.Count > 0) { navIdx = (navIdx + 1) % navSpots.Count; ShowSpot(); } };
+        BtnNavShow.Click += (_, _) => ShowSpot();
+        BtnTimelapse.Click += async (_, _) => await OpenTimelapse();
+        BtnTlClose.Click += (_, _) => CloseTimelapse();
+        TlSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty && !tlSliderBusy) TlShow(); };
+        TlPlay.Click += (_, _) => TlTogglePlay();
+        BtnTlVideo.Click += async (_, _) => await TlVideo();
+    }
+
+    async Task FindMissing()
+    {
+        var p = project; var lv = live; if (p == null || lv == null || !lv.Known) return;
+        BtnNavFind.IsEnabled = false; BtnNavFind.Content = "Suche …"; int cut = (int)CutSlider.Value;
+        var (spots, miss, wrong, cut2) = await Task.Run(() => Navigator.Find(p, lv, cut));
+        BtnNavFind.IsEnabled = true; BtnNavFind.Content = "Neu suchen";
+        navSpots = spots; navIdx = 0; NavRow.IsVisible = spots.Count > 0;
+        if (spots.Count == 0) { NavText.Text = "Alles gebaut – nichts fehlt und nichts ist falsch. 🎉"; return; }
+        NavText.Tag = $"Insgesamt {miss:N0} fehlend{(wrong > 0 ? $", {wrong:N0} falsch" : "")} an {spots.Count:N0}{(cut2 ? "+" : "")} Stellen. Falsche Blöcke kommen zuerst, dann von unten nach oben.";
+        ShowSpot();
+    }
+
+    void ShowSpot()
+    {
+        var p = project; if (p == null || navSpots.Count == 0) return;
+        var sp = navSpots[navIdx];
+        NavIdx.Text = $"{navIdx + 1} / {navSpots.Count}";
+        string what = $"{sp.MainCount:N0} × {Blocks.DisplayName(sp.MainBlock, true)}{(sp.Count > sp.MainCount ? $" (+{sp.Count - sp.MainCount:N0} andere)" : "")}";
+        NavText.Text = (sp.Wrong > 0 ? $"Falsch: {sp.Wrong:N0} Block{(sp.Wrong == 1 ? "" : "e")}" + (sp.Missing > 0 ? $", fehlt: {sp.Missing:N0}" : "") : "Fehlt") + $" – {what}\nbei X {p.OriginX + sp.X}  Y {p.OriginY + sp.Y}  Z {p.OriginZ + sp.Z}\n" + (NavText.Tag as string ?? "");
+        if (tab == 1) View3.LookAt(sp.X - p.W / 2.0 + .5, sp.Y, sp.Z - p.D / 2.0 + .5);
+        else
+        {
+            if (tab != 0) ShowTab(0);
+            if (ModeLayer.IsChecked == true) LayerSlider.Value = sp.MinY;
+            Plan.CenterOn(sp.X, sp.Z);
+        }
+    }
+
+    /* ---------- Zeitraffer ---------- */
+    TimelapseRecorder? recorder; readonly object recLock = new();
+    Timeline? timeline; bool[]? tlState; int tlPos; long tlT; bool tlOpen, tlSliderBusy; DispatcherTimer? tlTimer;
+
+    void Record(bool all, List<(int x, int y, int z)> cells)
+    {
+        var rec = recorder; var lv = live; if (rec == null || lv == null || !lv.Known) return;
+        Task.Run(() => { lock (recLock) rec.Update(lv, all ? null : cells); Dispatcher.UIThread.Post(UpdateTlInfo); });
+    }
+
+    void UpdateTlInfo()
+    {
+        long n = recorder?.Recorded ?? 0;
+        if (recorder != null) TlInfo.Text = n > 0 ? $"Aufnahme läuft · {n:N0} Änderungen gespeichert" : "Aufnahme läuft – sobald gebaut wird, entsteht der Zeitraffer.";
+        BtnTimelapse.IsEnabled = n > 0 || (timelineCount > 0);
+    }
+    long timelineCount;
+
+    void LoadTimelineInfo()
+    {
+        var p = project; if (p == null) return;
+        Task.Run(() => { var tl = Timeline.Load(store, p); Dispatcher.UIThread.Post(() =>
+        {
+            if (project != p) return; timelineCount = tl.Events.Length;
+            if (recorder == null) TlInfo.Text = tl.Events.Length > 0 ? $"{tl.Events.Length:N0} Änderungen vom {DateTimeOffset.FromUnixTimeMilliseconds(tl.Start).LocalDateTime:d} bis {DateTimeOffset.FromUnixTimeMilliseconds(tl.End).LocalDateTime:d} aufgezeichnet." : "Solange Live verbunden ist, merkt sich Blockplan, wann welcher Block gesetzt wurde.";
+            UpdateTlInfo();
+        }); });
+    }
+
+    async Task OpenTimelapse()
+    {
+        var p = project; if (p == null) return;
+        lock (recLock) recorder?.Flush();
+        Busy("Lade den Bauverlauf …");
+        var tl = await Task.Run(() => Timeline.Load(store, p));
+        Busy(null);
+        if (tl.Events.Length == 0) { await Message("Noch kein Zeitraffer", "Es wurde noch nichts aufgezeichnet. Verbinde dich live mit dem Server, während gebaut wird."); return; }
+        timeline = tl; tlOpen = true; ShowTab(1); TimeBar.IsVisible = true; StepBtn.IsChecked = false; SetStepMode(false);
+        tlSliderBusy = true; TlSlider.Value = 0; tlSliderBusy = false;
+        tlState = new bool[tl.Cells]; tlPos = 0; tlT = long.MinValue;
+        TlShow();
+    }
+
+    void CloseTimelapse()
+    {
+        tlTimer?.Stop(); TlPlay.IsChecked = false; TlPlay.Content = "▶ Abspielen";
+        tlOpen = false; TimeBar.IsVisible = false; timeline = null; tlState = null;
+        View3.SetHidden(null);
+    }
+
+    long TlTimeAt(double frac) { var tl = timeline!; return tl.Start + (long)((tl.End - tl.Start) * Math.Clamp(frac, 0, 1)); }
+
+    /// <summary>Zustand zum Zeitpunkt des Schiebers zeigen.</summary>
+    void TlShow()
+    {
+        var tl = timeline; var p = project; if (tl == null || p == null || tlState == null) return;
+        long t = TlTimeAt(TlSlider.Value / TlSlider.Maximum);
+        if (t < tlT) { tlState = new bool[tl.Cells]; tlPos = 0; }   // zurückspulen: von vorn
+        tlPos = tl.Advance(tlState, tlPos, t); tlT = t;
+        var st = (bool[])tlState.Clone();
+        View3.SetHidden(i => !st[i]);
+        long built = Timeline.PlacedCount(st), total = p.Cells.LongCount(c => c != 0);
+        TlText.Text = $"{DateTimeOffset.FromUnixTimeMilliseconds(t).LocalDateTime:dd.MM.yyyy HH:mm} · {built:N0} von {total:N0} gebaut ({(double)built / Math.Max(1, total):P0})";
+    }
+
+    void TlTogglePlay()
+    {
+        tlTimer?.Stop();
+        if (TlPlay.IsChecked != true) { TlPlay.Content = "▶ Abspielen"; return; }
+        TlPlay.Content = "⏸ Pause";
+        if (TlSlider.Value >= TlSlider.Maximum) TlSlider.Value = 0;
+        double secs = TlDur.SelectedIndex switch { 0 => 10, 2 => 60, _ => 20 }; var start = DateTime.Now; double from = TlSlider.Value;
+        tlTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Background, (_, _) =>
+        {
+            double v = from + (DateTime.Now - start).TotalSeconds / secs * TlSlider.Maximum;
+            if (v >= TlSlider.Maximum) { TlSlider.Value = TlSlider.Maximum; TlPlay.IsChecked = false; TlPlay.Content = "▶ Abspielen"; tlTimer!.Stop(); return; }
+            TlSlider.Value = v;
+        });
+        tlTimer.Start();
+    }
+
+    async Task TlVideo()
+    {
+        var tl = timeline; var p = project; if (tl == null || p == null) return;
+        tlTimer?.Stop(); TlPlay.IsChecked = false; TlPlay.Content = "▶ Abspielen";
+        string? path = Environment.GetEnvironmentVariable("BLOCKPLAN_VIDEO");   // zum Testen
+        if (path == null)
+        {
+            var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Zeitraffer als Video speichern", SuggestedFileName = string.Join("_", (p.Name + " Zeitraffer").Split(Path.GetInvalidFileNameChars())) + ".avi", DefaultExtension = "avi",
+                FileTypeChoices = new[] { new FilePickerFileType("Video (AVI)") { Patterns = new[] { "*.avi" } } },
+            });
+            if (f == null || f.TryGetLocalPath() is not { } pth) return;
+            path = pth;
+        }
+        int fps = 12, frames = (TlDur.SelectedIndex switch { 0 => 10, 2 => 60, _ => 20 }) * fps;
+        if (Environment.GetEnvironmentVariable("BLOCKPLAN_VIDEO_FRAMES") is { } vf && int.TryParse(vf, out var nf)) frames = nf;
+        const int vw = 1280, vh = 720;
+        try
+        {
+            using var avi = new AviWriter(path, vw, vh, fps);
+            var st = new bool[tl.Cells]; int pos = 0;
+            for (int k = 0; k <= frames; k++)
+            {
+                Busy($"Video: Bild {k + 1} von {frames + 1} …");
+                long t = TlTimeAt(k / (double)frames); pos = tl.Advance(st, pos, t);
+                var snap = (bool[])st.Clone();
+                var nb = View3.NextBuild(); View3.SetHidden(i => !snap[i]);
+                await Task.WhenAny(nb, Task.Delay(30000));
+                var shot = await View3.CapturePhoto(new View3D.PhotoOptions(vw, vh, View3D.PhotoTime.AsView, true, false, false));
+                if (shot is not { } img) throw new Exception("Die Grafikkarte konnte das Bild nicht zeichnen.");
+                long built = Timeline.PlacedCount(snap);
+                var label = $"{DateTimeOffset.FromUnixTimeMilliseconds(t).LocalDateTime:dd.MM.yyyy HH:mm}  ·  {built:N0} Blöcke";
+                var jpg = await Task.Run(() => FrameJpeg(img.rgba, img.w, img.h, label, p.Name));
+                avi.AddFrame(jpg);
+            }
+            Busy(null);
+            TlShow();
+            ShowHover($"Video gespeichert: {Path.GetFileName(path)} ({frames + 1} Bilder)");
+        }
+        catch (Exception e) { Busy(null); await Message("Video fehlgeschlagen", e.Message); }
+    }
+
+    /// <summary>Bild mit Datum unten links als JPEG.</summary>
+    static byte[] FrameJpeg(byte[] rgba, int w, int h, string label, string title)
+    {
+        var info = new SkiaSharp.SKImageInfo(w, h, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul);
+        using var bm = new SkiaSharp.SKBitmap(info);
+        System.Runtime.InteropServices.Marshal.Copy(rgba, 0, bm.GetPixels(), rgba.Length);
+        using (var cv = new SkiaSharp.SKCanvas(bm))
+        using (var font = new SkiaSharp.SKFont(SkiaSharp.SKTypeface.Default, 26))
+        using (var bg = new SkiaSharp.SKPaint { Color = new SkiaSharp.SKColor(13, 18, 15, 200), IsAntialias = true })
+        using (var fg = new SkiaSharp.SKPaint { Color = SkiaSharp.SKColors.White, IsAntialias = true })
+        {
+            string text = title + "  ·  " + label;
+            float tw = font.MeasureText(text);
+            cv.DrawRoundRect(new SkiaSharp.SKRect(20, h - 66, 20 + tw + 32, h - 20), 10, 10, bg);
+            cv.DrawText(text, 36, h - 33, font, fg);
+        }
+        using var data = bm.Encode(SkiaSharp.SKEncodedImageFormat.Jpeg, 88);
+        return data.ToArray();
     }
 
     void InitPlanning()
@@ -640,6 +1053,12 @@ public partial class MainWindow : Window
         ApplyProjectToViews(refit);
         ApplyView();
         UpdateSnowInfo(); UpdateCounts(); RenderPoints(); RenderGuides();
+        layerCount = Array.Empty<long>(); FillMatScopes();
+        if (tlOpen) CloseTimelapse();
+        navSpots = new(); NavRow.IsVisible = false; NavText.Text = ""; BtnNavFind.Content = "Fehlende Stellen suchen";
+        timelineCount = 0; LoadTimelineInfo();
+        if (StepBtn.IsChecked == true) SetStepMode(true);
+        if (CutAxis.SelectedIndex > 0) { CutAxis.SelectedIndex = 0; }
         if (tab == 3) partsPage.Refresh(); if (tab == 4) stagesPage.Refresh(); if (tab == 5) todosPage.Refresh();
         if (MatPage.IsVisible) BuildMaterials();
     }
@@ -662,7 +1081,8 @@ public partial class MainWindow : Window
         LayerRow.IsVisible = Plan.IsVisible && ModeLayer.IsChecked == true;
         if (project == null) return;
         Plan.SetView(ModeLayer.IsChecked == true, ly, cut);
-        View3.SetTop(cut);
+        View3.SetTop(cut, StepBtn.IsChecked == true ? cut : -1);
+        if (StepBtn.IsChecked == true) UpdateStepUi();
         if (MatPage.IsVisible) BuildMaterials();
     }
 
@@ -779,17 +1199,216 @@ public partial class MainWindow : Window
         return icons[v] = wb;
     }
 
+    /// <summary>Umfang der Materialliste: "" ganzes Projekt, "s:id" Etappe, "p:id" Bauplan.</summary>
+    List<(string key, string label)> matScopes = new();
+    bool matScopeBusy;
+
+    void FillMatScopes()
+    {
+        matScopeBusy = true;
+        var cur = MatScope.SelectedIndex >= 0 && MatScope.SelectedIndex < matScopes.Count ? matScopes[MatScope.SelectedIndex].key : "";
+        matScopes = new() { ("", "Ganzes Projekt (bis zur eingestellten Höhe)") };
+        if (plan != null)
+        {
+            foreach (var st in plan.Stages) matScopes.Add(("s:" + st.Id, "Etappe: " + st.Name + (st.Done ? " ✓" : "")));
+            var openStages = plan.Stages.Where(x => !x.Done).ToList();
+            if (openStages.Count > 0 && plan.Stages.Count > 1) matScopes.Add(("open", "Alle offenen Etappen"));
+            foreach (var t in plan.Parts.Where(x => !x.Base)) matScopes.Add(("p:" + t.Id, "Bauplan: " + plan.Label(t)));
+        }
+        MatScope.ItemsSource = matScopes.Select(x => x.label).ToList();
+        int idx = matScopes.FindIndex(x => x.key == cur); MatScope.SelectedIndex = idx < 0 ? 0 : idx;
+        matScopeBusy = false;
+    }
+
+    /// <summary>Blockzustände im gewählten Umfang.</summary>
+    (Dictionary<int, long> states, string what) MatStates()
+    {
+        var p = project!; var key = MatScope.SelectedIndex >= 0 && MatScope.SelectedIndex < matScopes.Count ? matScopes[MatScope.SelectedIndex].key : "";
+        if (plan != null && key.Length > 0)
+        {
+            var parts = plan.Parts;
+            if (key == "open") { var ids = plan.Stages.Where(x => !x.Done).SelectMany(x => x.Parts).ToHashSet(); return (plan.States(parts.Where(t => ids.Contains(t.Id))), "alle offenen Etappen"); }
+            if (key.StartsWith("s:") && plan.Stages.FirstOrDefault(x => x.Id == key[2..]) is { } st) { var ids = st.Parts.ToHashSet(); return (plan.States(parts.Where(t => ids.Contains(t.Id))), "Etappe „" + st.Name + "“"); }
+            if (key.StartsWith("p:") && parts.FirstOrDefault(x => x.Id == key[2..]) is { } pt) return (plan.States(new[] { pt }), "Bauplan „" + plan.Label(pt) + "“");
+        }
+        return (p.CountBlocks((int)CutSlider.Value), $"bis Y {p.OriginY + (int)CutSlider.Value}");
+    }
+
+    string ItemName(string item, int block)
+    {
+        if (mc != null && mc.ItemNamesDe.TryGetValue(item, out var n)) return n;
+        if (Blocks.Find(item) is var b and > 0) return Blocks.DisplayName(b, true);
+        if (block > 0) return Blocks.DisplayName(block, true);
+        return System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(item.Replace('_', ' '));
+    }
+
     void BuildMaterials()
     {
         if (project == null) { MatList.ItemsSource = null; return; }
         icons.Clear();
-        var counts = project.CountBlocks((int)CutSlider.Value);
-        var byBase = new Dictionary<int, long>();
-        foreach (var (v, c) in counts) { int b = Blocks.BaseOf(v); byBase[b] = byBase.GetValueOrDefault(b) + c; }
-        matAll = byBase.OrderByDescending(kv => kv.Value).Select(kv => new MatRow { Name = Blocks.DisplayName(kv.Key, true), Count = kv.Value, Icon = MatIcon(kv.Key) }).ToList();
+        if (MatScope.ItemsSource == null || matScopes.Count == 0) FillMatScopes();
+        var (states, what) = MatStates();
+        bool asItems = MatMode.SelectedIndex == 0;
+        if (asItems)
+        {
+            // Items wie im Inventar; Symbol vom ersten Block, aus dem das Item kommt
+            var from = new Dictionary<string, int>();
+            foreach (var v in states.Keys) foreach (var (it, _) in Items.Of(v)) from.TryAdd(it, Blocks.BaseOf(v));
+            var items = Items.FromStates(states);
+            matAll = items.OrderByDescending(kv => kv.Value).Select(kv =>
+            {
+                int src = from.GetValueOrDefault(kv.Key), blk = Items.BlockFor(kv.Key, src);
+                return new MatRow { Name = ItemName(kv.Key, src), Count = kv.Value, StackText = Items.StackText(kv.Key, kv.Value), Icon = MatIcon(blk), Block = src, Replace = src > 0 ? new Cmd(() => _ = ReplaceBlocks(src)) : null };
+            }).ToList();
+            var (slots, shulker, chests, dbl) = Items.Space(items);
+            MatSpaceText.Text = $"Platz: {slots:N0} Stacks  ·  {shulker:0.#} Shulker-Kisten  ·  {dbl:0.#} Doppelkisten  ·  {Math.Ceiling(slots / 36.0):N0} volle Inventare";
+            MatSub.Text = $"{matAll.Count} Items, {matAll.Sum(m => m.Count):N0} Stück · {what}. Wandfackeln zählen als Fackeln, doppelte Stufen als 2, Wasser und obere Türhälften nicht.";
+        }
+        else
+        {
+            var byBase = new Dictionary<int, long>();
+            foreach (var (v, c) in states) { int b = Blocks.BaseOf(v); byBase[b] = byBase.GetValueOrDefault(b) + c; }
+            matAll = byBase.OrderByDescending(kv => kv.Value).Select(kv => new MatRow { Name = Blocks.DisplayName(kv.Key, true), Count = kv.Value, StackText = Items.StackText(Blocks.Get(kv.Key).Key, kv.Value), Icon = MatIcon(kv.Key), Block = kv.Key, Replace = new Cmd(() => _ = ReplaceBlocks(kv.Key)) }).ToList();
+            MatSpaceText.Text = $"{matAll.Sum(m => m.Count):N0} Blöcke im Plan";
+            MatSub.Text = $"{matAll.Count} Sorten · {what}";
+        }
         MatTitle.Text = "Materialliste · " + project.Name;
-        MatSub.Text = $"{matAll.Count} Sorten, {matAll.Sum(m => m.Count):N0} Blöcke bis Y {project.OriginY + (int)CutSlider.Value}";
         FilterMat();
+    }
+
+    /// <summary>Baupläne im gewählten Umfang; null = ganzes Projekt.</summary>
+    List<Part>? ScopeParts()
+    {
+        var key = MatScope.SelectedIndex >= 0 && MatScope.SelectedIndex < matScopes.Count ? matScopes[MatScope.SelectedIndex].key : "";
+        if (plan == null || key.Length == 0) return null;
+        var parts = plan.Parts;
+        if (key == "open") { var ids = plan.Stages.Where(x => !x.Done).SelectMany(x => x.Parts).ToHashSet(); return parts.Where(t => ids.Contains(t.Id)).ToList(); }
+        if (key.StartsWith("s:") && plan.Stages.FirstOrDefault(x => x.Id == key[2..]) is { } st) { var ids = st.Parts.ToHashSet(); return parts.Where(t => ids.Contains(t.Id)).ToList(); }
+        if (key.StartsWith("p:")) return parts.Where(x => x.Id == key[2..]).ToList();
+        return null;
+    }
+
+    static bool InPart(Part t, int x, int y, int z)
+    {
+        var b = t.Box; if (x < b[0] || x > b[3] || y < b[1] || y > b[4] || z < b[2] || z > b[5]) return false;
+        int w = b[3] - b[0] + 1, d = b[5] - b[2] + 1; long mi = ((long)(y - b[1]) * d + (z - b[2])) * w + (x - b[0]);
+        var m = t.Mask; return mi < m.LongLength && m[mi] != 0;
+    }
+
+    async Task ExportSchem()
+    {
+        var p = project; if (p == null) return;
+        var parts = ScopeParts(); var (_, what) = MatStates();
+        int x0 = 0, y0 = 0, z0 = 0, x1 = p.W - 1, y1 = Math.Min((int)CutSlider.Value, p.H - 1), z1 = p.D - 1;
+        Func<int, int, int, bool>? keep = null;
+        if (parts != null)
+        {
+            if (parts.Count == 0) { await Message("Nichts zu exportieren", "In dieser Etappe sind noch keine Baupläne."); return; }
+            x0 = parts.Min(t => t.Box[0]); y0 = parts.Min(t => t.Box[1]); z0 = parts.Min(t => t.Box[2]);
+            x1 = parts.Max(t => t.Box[3]); y1 = parts.Max(t => t.Box[4]); z1 = parts.Max(t => t.Box[5]);
+            var ps = parts; keep = (x, y, z) => ps.Any(t => InPart(t, x, y, z));
+        }
+        var safe = string.Join("_", (p.Name + (parts != null ? " " + what.Replace("„", "").Replace("“", "") : "")).Split(Path.GetInvalidFileNameChars()));
+        var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Als Schematic speichern", SuggestedFileName = safe + ".schem", DefaultExtension = "schem",
+            FileTypeChoices = new[] { new FilePickerFileType("WorldEdit-Schematic") { Patterns = new[] { "*.schem" } } },
+        });
+        if (f == null || f.TryGetLocalPath() is not { } path) return;
+        Busy("Speichere Schematic …");
+        try
+        {
+            int dv = mc?.DataVersion > 0 ? mc.DataVersion : 4440;
+            var (bytes, n) = await Task.Run(() => { var b = SchemExport.Build(p, x0, y0, z0, x1, y1, z1, keep, dv, out var c); return (b, c); });
+            await File.WriteAllBytesAsync(path, bytes);
+            Busy(null);
+            await Message("Schematic gespeichert", $"{n:N0} Blöcke ({x1 - x0 + 1}×{y1 - y0 + 1}×{z1 - z0 + 1}) in {Path.GetFileName(path)}.\n\nIn WorldEdit: Datei in den Ordner schematics legen, dann //schem load {Path.GetFileNameWithoutExtension(path)} und //paste. In Litematica: in den Ordner schematics legen und laden.\n\nDie Ecke unten im Nordwesten ist der Einfügepunkt.");
+        }
+        catch (Exception e) { Busy(null); await Message("Speichern fehlgeschlagen", e.Message); }
+    }
+
+    sealed record Cand(int Block, string Name, Bitmap Icon);
+    (string projectId, ushort[] cells, string text)? undo;
+
+    async Task ReplaceBlocks(int from)
+    {
+        var p = project; if (p == null || from <= 0) return;
+        var parts = ScopeParts(); var (_, what) = MatStates(); int cut = Math.Min((int)CutSlider.Value, p.H - 1);
+        var all = Enumerable.Range(1, Blocks.Count - 1).Where(i => Blocks.All[i] is { } b && b.Props == null && i != from).ToList();
+        List<Cand> Cands(string q) => all.Select(i => (i, n: Blocks.DisplayName(i, true)))
+            .Where(t => q.Length == 0 || t.n.Contains(q, StringComparison.OrdinalIgnoreCase) || Blocks.Get(t.i).Key.Contains(q.Replace(' ', '_'), StringComparison.OrdinalIgnoreCase))
+            .OrderBy(t => t.n, StringComparer.CurrentCulture).Take(300).Select(t => new Cand(t.i, t.n, MatIcon(t.i))).ToList();
+        var w = new Window { Title = "Blöcke ersetzen", Width = 460, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var search = new TextBox { PlaceholderText = "Neuen Block suchen, z. B. Fichte …" };
+        var list = new ListBox { ItemsSource = Cands(""), Height = 330 };
+        list.ItemTemplate = new Avalonia.Controls.Templates.FuncDataTemplate<Cand>((c, _) =>
+        {
+            var img = new Image { Width = 20, Height = 20, Source = c?.Icon }; RenderOptions.SetBitmapInterpolationMode(img, BitmapInterpolationMode.None);
+            return new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Children = { img, new TextBlock { Text = c?.Name, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center } } };
+        });
+        search.TextChanged += (_, _) => list.ItemsSource = Cands(search.Text?.Trim() ?? "");
+        var keepForm = new CheckBox { Content = "Form und Ausrichtung übernehmen (Treppe → Treppe, Stufe → Stufe)", IsChecked = true };
+        var ok = new Button { Content = "Ersetzen", Classes = { "accent" }, MinWidth = 90, IsEnabled = false }; var cancel = new Button { Content = "Abbrechen", MinWidth = 90 };
+        list.SelectionChanged += (_, _) => ok.IsEnabled = list.SelectedItem is Cand;
+        bool go = false; ok.Click += (_, _) => { go = true; w.Close(); }; cancel.Click += (_, _) => w.Close();
+        var fromImg = new Image { Width = 24, Height = 24, Source = MatIcon(from) }; RenderOptions.SetBitmapInterpolationMode(fromImg, BitmapInterpolationMode.None);
+        w.Content = new StackPanel
+        {
+            Margin = new Thickness(20), Spacing = 10, Children =
+            {
+                new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10, Children = { fromImg, new TextBlock { Text = $"„{Blocks.DisplayName(from, true)}“ ersetzen durch …", FontSize = 16, FontWeight = FontWeight.SemiBold, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center } } },
+                new TextBlock { Text = "Gilt für: " + what + ". Treppen, Stufen, Zäune usw. aus demselben Material werden mitgenommen, wenn es sie im neuen Material auch gibt.", Classes = { "note" }, TextWrapping = TextWrapping.Wrap },
+                search, list, keepForm,
+                new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Children = { cancel, ok } },
+            }
+        };
+        w.Opened += (_, _) => search.Focus();
+        await w.ShowDialog(this);
+        if (!go || list.SelectedItem is not Cand to) return;
+
+        var map = BlockReplace.Map(from, to.Block, keepForm.IsChecked == true);
+        Busy("Ersetze Blöcke …");
+        var before = (ushort[])p.Cells.Clone();
+        long n = await Task.Run(() =>
+        {
+            long c = 0;
+            for (int y = 0; y <= (parts == null ? cut : p.H - 1); y++) for (int z = 0; z < p.D; z++) for (int x = 0; x < p.W; x++)
+            {
+                long i = p.Index(x, y, z); int v = p.Cells[i]; if (v == 0) continue;
+                int nv = map(v); if (nv == v) continue;
+                if (parts != null && !parts.Any(t => InPart(t, x, y, z))) continue;
+                p.Cells[i] = (ushort)nv; c++;
+            }
+            if (c > 0) store.Save(p);
+            return c;
+        });
+        Busy(null);
+        if (n == 0) { await Message("Nichts ersetzt", "Im gewählten Teil gibt es diesen Block nicht."); return; }
+        undo = (p.Id, before, $"{n:N0} × {Blocks.DisplayName(from, true)} → {to.Name}");
+        BtnUndo.IsVisible = true; ToolTip.SetTip(BtnUndo, "Rückgängig: " + undo.Value.text);
+        SetProject(p, false);
+        MatSub.Text = $"Ersetzt: {undo.Value.text}. " + MatSub.Text;
+    }
+
+    async Task UndoReplace()
+    {
+        var p = project; if (p == null || undo is not { } u || u.projectId != p.Id) { BtnUndo.IsVisible = false; return; }
+        p.Cells = u.cells; undo = null; BtnUndo.IsVisible = false;
+        Busy("Stelle wieder her …"); await Task.Run(() => store.Save(p)); Busy(null);
+        SetProject(p, false);
+    }
+
+    async Task CopyMaterials()
+    {
+        if (project == null) return;
+        var (_, what) = MatStates();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Material für {project.Name} – {what}");
+        foreach (var m in matAll) sb.AppendLine($"{m.Count,8:N0}  {m.Name}{(m.StackText.Length > 0 ? "  (" + m.StackText + ")" : "")}");
+        sb.AppendLine(MatSpaceText.Text);
+        if (Clipboard != null) await Clipboard.SetTextAsync(sb.ToString());
+        BtnMatCopy.Content = "Kopiert ✓";
+        DispatcherTimer.RunOnce(() => BtnMatCopy.Content = "Liste kopieren", TimeSpan.FromSeconds(2));
     }
 
     void FilterMat()

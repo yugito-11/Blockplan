@@ -93,6 +93,9 @@ public sealed class McAssets
     }
     public Dictionary<string, JsonNode> Models { get; private set; } = new();        // models/block/*.json
     public Dictionary<string, string> NamesDe { get; } = new();       // Block-Key → deutscher Name
+    public Dictionary<string, string> ItemNamesDe { get; } = new();   // Item-ID → deutscher Name (Samen, Redstone …)
+    /// <summary>Weltversion der Spieldatei (für den Schematic-Export), 0 = unbekannt.</summary>
+    public int DataVersion { get; private set; }
     public string Version { get; private set; } = "";
 
     static readonly Dictionary<string, (int r, int g, int b)> Tints = new()
@@ -232,7 +235,12 @@ public sealed class McAssets
                 await File.WriteAllTextAsync(cache, json);
             }
             if (JsonNode.Parse(json) is JsonObject dob)
-                foreach (var kv in dob) if (kv.Key.StartsWith("block.minecraft.") && kv.Key.Count(c => c == '.') == 2) NamesDe[kv.Key[16..]] = (string?)kv.Value ?? "";
+                foreach (var kv in dob)
+                {
+                    if (kv.Key.Count(c => c == '.') != 2) continue;
+                    if (kv.Key.StartsWith("block.minecraft.")) NamesDe[kv.Key[16..]] = (string?)kv.Value ?? "";
+                    else if (kv.Key.StartsWith("item.minecraft.")) ItemNamesDe[kv.Key[15..]] = (string?)kv.Value ?? "";
+                }
         }
         catch { /* ohne Netz: englische Namen */ }
     }
@@ -249,6 +257,11 @@ public sealed class McAssets
         foreach (var e in zip.Entries)
         {
             var n = e.FullName;
+            if (n == "version.json")
+            {   // Weltversion für exportierte Schematics
+                try { var vj = Parse(e); a.DataVersion = (int?)vj?["world_version"] ?? 0; if ((string?)vj?["id"] is { Length: > 0 } id) a.Version = id; } catch { }
+                continue;
+            }
             if (!n.StartsWith("assets/minecraft/")) continue;
             if (n.StartsWith("assets/minecraft/textures/block/") && n.EndsWith(".png") && n.IndexOf('/', 32) < 0)
             {
@@ -274,7 +287,12 @@ public sealed class McAssets
         a.ResolveFaces(bs, models);
         a.BlockStates = bs; a.Models = models;
         if (de is JsonObject dob)
-            foreach (var kv in dob) if (kv.Key.StartsWith("block.minecraft.") && kv.Key.Count(c => c == '.') == 2) a.NamesDe[kv.Key[16..]] = (string?)kv.Value ?? "";
+            foreach (var kv in dob)
+            {
+                if (kv.Key.Count(c => c == '.') != 2) continue;
+                if (kv.Key.StartsWith("block.minecraft.")) a.NamesDe[kv.Key[16..]] = (string?)kv.Value ?? "";
+                else if (kv.Key.StartsWith("item.minecraft.")) a.ItemNamesDe[kv.Key[15..]] = (string?)kv.Value ?? "";
+            }
         return a;
     }
 

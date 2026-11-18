@@ -78,6 +78,7 @@
       <v:Plan2D x:Name="Plan"/>
       <v:View3D x:Name="View3" IsVisible="False"/>
       <Border x:Name="Bar3D" Classes="glass" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" IsVisible="False" Padding="6">
+        <StackPanel Spacing="6">
         <StackPanel Orientation="Horizontal" Spacing="10">
           <ToggleButton x:Name="FlyBtn" Content="Flugmodus (F)" Foreground="White" Padding="10,4"/>
           <TextBlock Text="Tempo" Foreground="#C8D2CB" VerticalAlignment="Center" FontSize="12"/>
@@ -88,25 +89,81 @@
           <TextBlock x:Name="MouseVal" Foreground="White" VerticalAlignment="Center" FontSize="12" MinWidth="40"/>
           <CheckBox x:Name="Guides3DChk" Content="Hilfslinien" Foreground="White" IsChecked="True" Margin="8,0,0,0"/>
         </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <ToggleButton x:Name="StepBtn" Content="▤ Bau-Anleitung" Foreground="White" Padding="10,4" ToolTip.Tip="Ebene für Ebene aufbauen, mit dem Material jeder Ebene"/>
+          <ToggleButton x:Name="WalkBtn" Content="🚶 Laufen (G)" Foreground="White" Padding="10,4" ToolTip.Tip="Durch den Bau laufen wie im Spiel: WASD, Leertaste springen, Strg rennen"/>
+          <ToggleButton x:Name="NightBtn" Content="☾ Nacht" Foreground="White" Padding="10,4" ToolTip.Tip="Nachts leuchten nur Fackeln, Laternen &amp; Co."/>
+          <CheckBox x:Name="SpawnChk" Content="Spawn-Stellen" Foreground="White" IsChecked="True" IsVisible="False" ToolTip.Tip="Rote Kreuze: dort ist es so dunkel, dass Monster erscheinen können"/>
+          <Button x:Name="PhotoBtn" Content="📷 Foto" Foreground="White" Padding="10,4" ToolTip.Tip="Ein schönes, großes Bild der Ansicht speichern"/>
+          <TextBlock x:Name="LightInfo" Foreground="#FFB4B4" VerticalAlignment="Center" FontSize="12"/>
+        </StackPanel>
+        </StackPanel>
+      </Border>
+      <Border x:Name="TimeBar" Classes="glass" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="12,12,12,48" IsVisible="False" Padding="12,8" Width="640">
+        <StackPanel Spacing="6">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Text="ZEITRAFFER" Foreground="#C8D2CB" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <TextBlock x:Name="TlText" Grid.Column="1" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Button x:Name="BtnTlClose" Grid.Column="2" Content="×" Foreground="White" Background="Transparent" Padding="8,0"/>
+          </Grid>
+          <Slider x:Name="TlSlider" Minimum="0" Maximum="1000"/>
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+            <ToggleButton x:Name="TlPlay" Content="▶ Abspielen" Foreground="White" Padding="10,3"/>
+            <ComboBox x:Name="TlDur" SelectedIndex="1" Foreground="White">
+              <ComboBoxItem Content="in 10 Sekunden"/>
+              <ComboBoxItem Content="in 20 Sekunden"/>
+              <ComboBoxItem Content="in 60 Sekunden"/>
+            </ComboBox>
+            <Button x:Name="BtnTlVideo" Content="🎬 Als Video speichern …" Foreground="White" Padding="10,3"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+      <Border x:Name="StepBar" Classes="glass" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="12,12,12,48" IsVisible="False" Padding="10,8" MaxWidth="760">
+        <StackPanel Spacing="8">
+          <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+            <Button x:Name="StepFirst" Content="⏮" Foreground="White" Padding="8,3" ToolTip.Tip="Erste Ebene"/>
+            <Button x:Name="StepPrev" Content="◀" Foreground="White" Padding="10,3" ToolTip.Tip="Ebene zurück (Bild ↓)"/>
+            <TextBlock x:Name="StepText" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" MinWidth="240" TextAlignment="Center"/>
+            <Button x:Name="StepNext" Content="▶" Foreground="White" Padding="10,3" ToolTip.Tip="Nächste Ebene (Bild ↑)"/>
+            <Button x:Name="StepLast" Content="⏭" Foreground="White" Padding="8,3" ToolTip.Tip="Ganzer Bau"/>
+            <ToggleButton x:Name="StepPlay" Content="▶ Abspielen" Foreground="White" Padding="10,3" Margin="10,0,0,0"/>
+            <Slider x:Name="StepSpeed" Minimum="0.2" Maximum="3" Value="1" Width="90" VerticalAlignment="Center" ToolTip.Tip="Sekunden je Ebene"/>
+          </StackPanel>
+          <WrapPanel x:Name="StepMat" HorizontalAlignment="Center"/>
+        </StackPanel>
       </Border>
       <Border x:Name="MatPage" IsVisible="False" Background="{DynamicResource BgBrush}" Padding="24">
         <DockPanel>
           <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,14">
             <TextBlock x:Name="MatTitle" Text="Materialliste" FontSize="22" FontWeight="SemiBold"/>
             <TextBlock x:Name="MatSub" Classes="note"/>
-            <TextBox x:Name="MatSearch" PlaceholderText="Block suchen …" Width="280" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+            <WrapPanel Margin="0,8,0,0">
+              <ComboBox x:Name="MatScope" MinWidth="240" Margin="0,0,8,6" ToolTip.Tip="Für welchen Teil des Baus?"/>
+              <ComboBox x:Name="MatMode" Width="210" Margin="0,0,8,6" SelectedIndex="0">
+                <ComboBoxItem Content="Einkaufsliste (Items)"/>
+                <ComboBoxItem Content="Blöcke im Plan"/>
+              </ComboBox>
+              <TextBox x:Name="MatSearch" PlaceholderText="Block suchen …" Width="220" Margin="0,0,8,6"/>
+              <Button x:Name="BtnMatCopy" Content="Liste kopieren" Margin="0,0,8,6" ToolTip.Tip="Als Text in die Zwischenablage, z. B. für Discord"/>
+              <Button x:Name="BtnExport" Content="Als .schem exportieren …" Margin="0,0,8,6" ToolTip.Tip="Den gewählten Teil (ganzes Projekt, Etappe oder Bauplan) für WorldEdit oder Litematica speichern"/>
+              <Button x:Name="BtnUndo" Content="↶ Ersetzen rückgängig" Margin="0,0,8,6" IsVisible="False"/>
+            </WrapPanel>
+            <Border x:Name="MatSpace" Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="12,8" HorizontalAlignment="Left">
+              <TextBlock x:Name="MatSpaceText" FontWeight="SemiBold"/>
+            </Border>
           </StackPanel>
           <Border Classes="card" Padding="0">
             <ListBox x:Name="MatList" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="local:MatRow">
-                  <Grid ColumnDefinitions="28,*,110,130" Height="30">
+                  <Grid ColumnDefinitions="28,*,110,220,Auto" Height="30">
                     <Image Grid.Column="0" Source="{Binding Icon}" Width="22" Height="22" RenderOptions.BitmapInterpolationMode="None"/>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
                       <TextBlock Text="{Binding Name}"/>
                     </StackPanel>
                     <TextBlock Grid.Column="2" Text="{Binding CountText}" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas,monospace"/>
                     <TextBlock Grid.Column="3" Text="{Binding StackText}" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
+                    <Button Grid.Column="4" Content="Ersetzen …" IsVisible="{Binding CanReplace}" Command="{Binding Replace}" Margin="12,0,0,0" Padding="8,2" FontSize="12" VerticalAlignment="Center"/>
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -170,6 +227,24 @@
             </StackPanel>
           </Border>
 
+          <Border Classes="card" x:Name="CutCard" IsVisible="False">
+            <StackPanel Spacing="8">
+              <TextBlock Text="SCHNITT" Classes="h"/>
+              <TextBlock Classes="note" Text="Den Bau aufschneiden und hineinschauen."/>
+              <ComboBox x:Name="CutAxis" HorizontalAlignment="Stretch" SelectedIndex="0">
+                <ComboBoxItem Content="Kein Schnitt"/>
+                <ComboBoxItem Content="Schnitt Nord–Süd (entlang X)"/>
+                <ComboBoxItem Content="Schnitt West–Ost (entlang Z)"/>
+              </ComboBox>
+              <Grid ColumnDefinitions="*,Auto" x:Name="CutPosRow" IsVisible="False">
+                <TextBlock Text="Schnitt bei" Classes="note" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" x:Name="CutPosVal" FontFamily="Consolas,monospace"/>
+              </Grid>
+              <Slider x:Name="CutPos" Minimum="0" Maximum="1" TickFrequency="1" IsSnapToTickEnabled="True" IsVisible="False"/>
+              <CheckBox x:Name="CutOther" Content="Andere Hälfte zeigen" IsVisible="False"/>
+            </StackPanel>
+          </Border>
+
           <Border Classes="card" x:Name="LiveCard">
             <StackPanel Spacing="8">
               <TextBlock Text="LIVE-SERVER" Classes="h"/>
@@ -186,6 +261,26 @@
               <TextBlock x:Name="LiveProgress" Classes="note" FontWeight="SemiBold"/>
               <CheckBox x:Name="LiveProgChk" Content="Baufortschritt zeigen" IsChecked="True"/>
               <CheckBox x:Name="LiveSurrChk" Content="Umgebung aus der Welt zeigen" IsChecked="True"/>
+              <Border x:Name="NavBox" Background="{DynamicResource SunkBrush}" CornerRadius="8" Padding="10,8" IsVisible="False">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Was fehlt noch?" FontWeight="SemiBold"/>
+                  <Button x:Name="BtnNavFind" Content="Fehlende Stellen suchen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                  <Grid x:Name="NavRow" ColumnDefinitions="Auto,*,Auto,6,Auto" IsVisible="False">
+                    <Button x:Name="BtnNavPrev" Content="◀" Padding="8,2"/>
+                    <TextBlock x:Name="NavIdx" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center" FontFamily="Consolas,monospace"/>
+                    <Button x:Name="BtnNavNext" Grid.Column="2" Content="▶" Padding="8,2"/>
+                    <Button x:Name="BtnNavShow" Grid.Column="4" Content="Zeigen" Classes="accent" Padding="10,2"/>
+                  </Grid>
+                  <TextBlock x:Name="NavText" Classes="note"/>
+                </StackPanel>
+              </Border>
+              <Border x:Name="TlBox" Background="{DynamicResource SunkBrush}" CornerRadius="8" Padding="10,8">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Zeitraffer" FontWeight="SemiBold"/>
+                  <TextBlock x:Name="TlInfo" Classes="note" Text="Solange Live verbunden ist, merkt sich Blockplan, wann welcher Block gesetzt wurde."/>
+                  <Button x:Name="BtnTimelapse" Content="Zeitraffer ansehen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" IsEnabled="False"/>
+                </StackPanel>
+              </Border>
               <StackPanel x:Name="LivePlayers" Spacing="2"/>
             </StackPanel>
           </Border>

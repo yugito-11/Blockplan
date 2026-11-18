@@ -125,7 +125,7 @@ public static class ModelTest
         foreach (var k in new[] { "decorated_pot[cracked=false,facing=north,waterlogged=false]", "conduit[waterlogged=true]", "copper_golem_statue[copper_golem_pose=standing,facing=north,waterlogged=false]", "end_portal", "player_head[powered=false,rotation=0]", "dragon_head[powered=false,rotation=0]", "piglin_head[powered=false,rotation=0]", "white_shulker_box[facing=up]" })
             Ok(bank.Get(Blocks.Ensure(k), 0).Length > 0, "gezeichnet: " + k);
         var inv = new Project { W = 2, D = 1, H = 1, Cells = new ushort[] { (ushort)Blocks.Ensure("barrier"), (ushort)Blocks.Ensure("light[level=15,waterlogged=false]") } };
-        Ok(Mesher.Build(inv, 0, atlas).Count == 0, "Barriere und Licht unsichtbar");
+        Ok(Mesher.Build(inv, 0, atlas).All(c => c.I.Length == 0), "Barriere und Licht unsichtbar");
         Console.WriteLine(fail == 0 ? "ALLE MODELLE OK" : fail + " Fehler");
         return fail;
     }

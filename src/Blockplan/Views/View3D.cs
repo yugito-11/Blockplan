@@ -18,7 +18,7 @@ namespace Blockplan.Views;
 /// <summary>3D-Ansicht mit OpenGL. Linke Maustaste dreht, rechte verschiebt, Mausrad zoomt.</summary>
 public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTest
 {
-    GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg, uTrans; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky;
+    GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg, uTrans; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky, uNight, uSun, uSunOn, uHiOn;
     /// <summary>Geometrie in benannten Stücken: "r:<Bereich>" Projekt, "c:<cx>,<cz>" Umgebung, "players", "guides".</summary>
     readonly Dictionary<string, List<(uint vao, uint vbo, uint ebo, int count, bool trans)>> meshes = new();
     readonly List<(string key, List<MeshChunk>? chunks)> pending = new(); (byte[] px, int cols)? pendingAtlas; bool clearMeshes;
@@ -36,7 +36,10 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     public event Action<string>? Status;
     public event Action<string>? Hover;
 
-    static readonly Vector3 Sky = new(0.47f, 0.65f, 1.0f);
+    static readonly Vector3 Sky = new(0.47f, 0.65f, 1.0f), NightSky = new(0.035f, 0.05f, 0.11f);
+    /// <summary>Fotomodus: Sonnenrichtung statt fester Helligkeit je Seite; Himmel nach Tageszeit.</summary>
+    bool sunOn; Vector3 sunDir = new(0.4f, 0.8f, 0.3f); Vector3? skyOverride;
+    Vector3 SkyNow() => skyOverride ?? (night && lightMap != null ? NightSky : Sky);
 
     public View3D()
     {
@@ -52,12 +55,21 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     /* ---------- Daten ---------- */
     public void SetProject(Project? p, Atlas a, int topY, bool refit)
     {
-        project = p; atlas = a; top = topY;
+        bool other = p != project; project = p; atlas = a; top = topY;
         if (p != null && refit) Fit();
-        Rebuild();
+        if (other) { lightMap = null; spawnSpots = new(); hidden = null; hiY = -1; }
+        if (night && p != null) SetNight(true, showSpawns); else Rebuild();
     }
 
-    public void SetTop(int topY) { if (topY == top) return; top = topY; Rebuild(); }
+    public void SetTop(int topY) => SetTop(topY, hiY);
+    /// <summary>Höhe und hervorgehobene Ebene zusammen setzen (nur einmal neu bauen).</summary>
+    public void SetTop(int topY, int highlight)
+    {
+        if (topY == top && highlight == hiY) return;
+        bool topChanged = topY != top; top = topY; hiY = highlight;
+        if (night && topChanged) SetNight(true, showSpawns); else Rebuild();
+    }
+    public void ShowSpawns(bool on) { showSpawns = on; RebuildExtras(false); RequestNextFrameRendering(); }
 
     void Fit()
     {
@@ -79,7 +91,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     /// <summary>Kamera auf eine Stelle der Szene richten (z. B. einen Spieler).</summary>
     public void LookAt(double x, double y, double z)
     {
-        if (Fly) SetFly(false);
+        if (Fly) SetFly(false); if (Walk) SetWalk(false);
         target = new Vector3((float)x, (float)y + 1, (float)z); dist = Math.Min(dist, 40); RequestNextFrameRendering();
     }
 
@@ -104,15 +116,59 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
                 if (cts != my) return;
                 Status?.Invoke($"3D: {tris:N0} Dreiecke in {sw.ElapsedMilliseconds:N0} ms");
                 RebuildExtras(true); RequestNextFrameRendering();
+                var w = buildWaiters; buildWaiters = new(); foreach (var t2 in w) t2.TrySetResult();
             });
         }, my.Token);
     }
 
+    List<TaskCompletionSource> buildWaiters = new();
+    /// <summary>Wartet, bis die nächste vollständige 3D-Geometrie fertig ist (für Videobilder).</summary>
+    public Task NextBuild() { var t = new TaskCompletionSource(); buildWaiters.Add(t); return t.Task; }
+
     MeshOptions? Options(HashSet<int>? regions)
     {
         var p = project; var lv = live;
-        if (!progress || lv == null || !lv.Known || p == null) return regions == null ? null : new MeshOptions { Regions = regions };
-        return new MeshOptions { Regions = regions, Status = (x, y, z, v) => lv.Status(p, x, y, z, v) };
+        var o = new MeshOptions { Regions = regions, HighlightY = hiY, ClipAxis = clipAxis, ClipPos = clipPos, ClipKeepHigh = clipHigh, Light = night ? lightMap : null, Hidden = hidden };
+        if (progress && hidden == null && lv != null && lv.Known && p != null) o.Status = (x, y, z, v) => lv.Status(p, x, y, z, v);
+        return o;
+    }
+
+    /* ---------- Bau-Anleitung, Schnitt, Nacht, Zeitraffer ---------- */
+    int hiY = -1, clipAxis, clipPos; bool clipHigh, night, showSpawns; byte[]? lightMap; Func<long, bool>? hidden;
+    List<(int x, int y, int z)> spawnSpots = new();
+    public int SpawnCount => spawnSpots.Count;
+    public bool Night => night;
+    public event Action? LightReady;
+
+    /// <summary>Ebene, die in der Bau-Anleitung hervorgehoben wird (-1 = keine).</summary>
+    public void SetHighlight(int y) { if (y == hiY) return; hiY = y; Rebuild(); }
+
+    /// <summary>Schnitt: Achse 0 aus, 1 = X (Blick von Osten/Westen), 2 = Z; pos in Projekt-Koordinaten.</summary>
+    public void SetClip(int axis, int pos, bool keepHigh)
+    {
+        if (axis == clipAxis && pos == clipPos && keepHigh == clipHigh) return;
+        clipAxis = axis; clipPos = pos; clipHigh = keepHigh; Rebuild();
+    }
+
+    /// <summary>Zeitraffer: Felder, die zu diesem Zeitpunkt noch nicht gebaut waren, weglassen.</summary>
+    public void SetHidden(Func<long, bool>? h) { hidden = h; Rebuild(); }
+
+    /// <summary>Nachtansicht: Licht berechnen (im Hintergrund), dann neu bauen.</summary>
+    public void SetNight(bool on, bool spawns)
+    {
+        bool lightChanged = on != night; night = on; showSpawns = spawns;
+        if (!on) { spawnSpots = new(); if (lightChanged) Rebuild(); else RebuildExtras(false); return; }
+        var p = project; int t = top; if (p == null) return;
+        Status?.Invoke("Berechne Licht …");
+        Task.Run(() =>
+        {
+            var L = Lighting.Compute(p, t); var sp = Lighting.SpawnSpots(p, L, t);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (project != p || !night) return;
+                lightMap = L; spawnSpots = sp; Rebuild(); LightReady?.Invoke();
+            });
+        });
     }
 
     void QueueAtlas(Atlas a)
@@ -220,13 +276,23 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         return (uint)((r + m) * 255) << 16 | (uint)((g + m) * 255) << 8 | (uint)((b + m) * 255);
     }
 
+    /// <summary>Flacher Strich am Boden von (x0,z0) nach (x1,z1), Breite w (für Spawn-Kreuze).</summary>
+    static void AddFlat(List<float> V, List<uint> I, float x0, float z0, float x1, float z1, float y, float w, int tile)
+    {
+        float dx = x1 - x0, dz = z1 - z0, l = MathF.Sqrt(dx * dx + dz * dz), nx = -dz / l * w, nz = dx / l * w;
+        uint b = (uint)(V.Count / Mesher.Stride);
+        float[] c = { x0 + nx, z0 + nz, x1 + nx, z1 + nz, x1 - nx, z1 - nz, x0 - nx, z0 - nz };
+        for (int k = 0; k < 4; k++) { V.Add(c[k * 2]); V.Add(y); V.Add(c[k * 2 + 1]); V.Add(0); V.Add(0); V.Add(tile * 8 + 2); V.Add(5); V.Add(0); }
+        I.Add(b); I.Add(b + 1); I.Add(b + 2); I.Add(b); I.Add(b + 2); I.Add(b + 3);
+    }
+
     /// <summary>Quader als Flächen (Szenen-Koordinaten).</summary>
     static void AddBox(List<float> V, List<uint> I, float x0, float y0, float z0, float x1, float y1, float z1, int tile, float flag, bool top = true, bool bottom = true)
     {
         void Q(float[] c, int dir)
         {
             uint b = (uint)(V.Count / Mesher.Stride); float[] uv = { 0, 1, 1, 1, 1, 0, 0, 0 };
-            for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1]); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(tile * 8 + dir); V.Add(flag); }
+            for (int k = 0; k < 4; k++) { V.Add(c[k * 3]); V.Add(c[k * 3 + 1]); V.Add(c[k * 3 + 2]); V.Add(uv[k * 2]); V.Add(uv[k * 2 + 1]); V.Add(tile * 8 + dir); V.Add(flag); V.Add(Mesher.DayLight); }
             I.Add(b); I.Add(b + 1); I.Add(b + 2); I.Add(b); I.Add(b + 2); I.Add(b + 3);
         }
         Q(new[] { x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1 }, 0); Q(new[] { x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0 }, 1);
@@ -256,6 +322,17 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
                 }
             var m = new MeshChunk { V = V.ToArray(), I = I.ToArray() };
             lock (pending) pending.Add(("players", V.Count > 0 ? new List<MeshChunk> { m } : null));
+            // Nacht: Stellen, an denen Monster erscheinen können, als rote Kreuze am Boden
+            var SV = new List<float>(); var SI = new List<uint>();
+            int red = night && showSpawns && spawnSpots.Count > 0 ? Solid(0xff3344) : 0;
+            if (night && showSpawns)
+                foreach (var (x, y, z) in spawnSpots)
+                {
+                    if (y > top || (clipAxis != 0 && !(clipHigh ? (clipAxis == 1 ? x : z) >= clipPos : (clipAxis == 1 ? x : z) <= clipPos))) continue;
+                    float X = x + ox, Z = z + oz, Y = y + 0.03f, a = .18f, b = .82f, w = .09f;
+                    AddFlat(SV, SI, X + a, Z + a, X + b, Z + b, Y, w, red); AddFlat(SV, SI, X + a, Z + b, X + b, Z + a, Y, w, red);
+                }
+            lock (pending) pending.Add(("spawn", SV.Count > 0 ? new List<MeshChunk> { new() { V = SV.ToArray(), I = SI.ToArray() } } : null));
         }
         if (guides)
         {
@@ -287,16 +364,22 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         bool es = GlVersion.Type == GlProfileType.OpenGLES;
         string head = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
         string vs = head + @"
-layout(location=0) in vec3 pos; layout(location=1) in vec2 tuv; layout(location=2) in float td; layout(location=3) in float fl;
+layout(location=0) in vec3 pos; layout(location=1) in vec2 tuv; layout(location=2) in float td; layout(location=3) in float fl; layout(location=4) in float li;
 uniform mat4 mvp; uniform vec3 cam;
-out vec2 vUv; out float vTd; out float vDist; out float vFl;
-void main(){ vUv=tuv; vTd=td; vFl=fl; vDist=distance(pos,cam); gl_Position=mvp*vec4(pos,1.0); }";
+out vec2 vUv; out float vTd; out float vDist; out float vFl; out float vLi; out vec3 vPos;
+void main(){ vUv=tuv; vTd=td; vFl=fl; vLi=li; vPos=pos; vDist=distance(pos,cam); gl_Position=mvp*vec4(pos,1.0); }";
         string fs = head + @"
 uniform sampler2D atlas; uniform sampler2D avgTex; uniform float cols; uniform float trans; uniform float fogNear; uniform float fogFar; uniform vec3 sky;
-in vec2 vUv; in float vTd; in float vDist; in float vFl; out vec4 outColor;
+uniform float night; uniform vec3 sun; uniform float sunOn; uniform float hiOn;
+in vec2 vUv; in float vTd; in float vDist; in float vFl; in float vLi; in vec3 vPos; out vec4 outColor;
+float bright(float l){ float x=l/15.0; return mix(x/(4.0-3.0*x), x, 0.35); }
 void main(){
   float t=floor((vTd+0.5)/8.0); float d=floor(vTd+0.5)-t*8.0;
   float sh = d<1.5?0.6:(d<2.5?1.0:(d<3.5?0.5:(d<5.5?0.8:0.9)));
+  if (sunOn>0.5 && d<5.5) {   // Fotomodus: Licht aus Richtung der Sonne
+    vec3 n = d<0.5?vec3(1,0,0):(d<1.5?vec3(-1,0,0):(d<2.5?vec3(0,1,0):(d<3.5?vec3(0,-1,0):(d<4.5?vec3(0,0,1):vec3(0,0,-1)))));
+    sh = 0.42 + 0.68*max(dot(n,normalize(sun)),0.0);
+  }
   vec2 f=clamp(fract(vUv),0.002,0.998); vec2 o=vec2(mod(t,cols),floor(t/cols));
   vec4 c=texture(atlas,(o+vec2(f.x,1.0-f.y))/cols); if(trans<0.5 ? c.a<0.5 : c.a<0.02) discard;
   // weit weg: Durchschnittsfarbe der Kachel statt Pixelrauschen
@@ -308,11 +391,21 @@ void main(){
   // Baufortschritt: fehlt = hellblau durchscheinend, falsch = rot; Hilfslinien/Farben halb durchsichtig
   if (vFl>0.5 && vFl<1.5) { c.rgb=mix(c.rgb,vec3(0.49,0.78,1.0),0.55); a=0.32; }
   else if (vFl>1.5 && vFl<2.5) { c.rgb=mix(c.rgb,vec3(1.0,0.23,0.23),0.6); a=0.55; }
-  else if (vFl>2.5) { a = trans<0.5 ? 1.0 : 0.55; }
-  outColor=vec4(mix(c.rgb*sh,sky,fog), a);
+  else if (vFl>2.5 && vFl<3.5) { a = trans<0.5 ? 1.0 : 0.55; }
+  else if (vFl>3.5 && vFl<4.5) { c.rgb = mix(c.rgb, vec3(1.0,0.84,0.25), 0.38) * 1.15; }   // Bau-Anleitung: aktuelle Ebene
+  vec3 col = c.rgb*sh;
+  if (hiOn>0.5 && vFl<0.5) col *= 0.55;   // Bau-Anleitung: Fertiges dunkler, damit die neue Ebene auffällt
+  if (night>0.0) {   // Nacht: Mondlicht von oben, warmes Licht von Fackeln & Co.
+    float skyL=floor(vLi/16.0+0.001); float blk=vLi-skyL*16.0;
+    vec3 L = max(vec3(0.20,0.25,0.42)*bright(skyL)+vec3(0.035), vec3(1.0,0.80,0.55)*bright(blk));
+    col = mix(col, col*L, night);
+  }
+  if (vFl>4.5) { col = vec3(1.0,0.2,0.25); a = 0.85; }   // Spawn-Stelle
+  outColor=vec4(mix(col,sky,fog), a);
 }";
         try { prog = Link(vs, fs); } catch (Exception ex) { Console.Error.WriteLine("[3D] " + ex.Message); throw; }
         uMvp = gl.GetUniformLocation(prog, "mvp"); uCols = gl.GetUniformLocation(prog, "cols"); uCam = gl.GetUniformLocation(prog, "cam");
+        uHiOn = gl.GetUniformLocation(prog, "hiOn"); uNight = gl.GetUniformLocation(prog, "night"); uSun = gl.GetUniformLocation(prog, "sun"); uSunOn = gl.GetUniformLocation(prog, "sunOn");
         uFogNear = gl.GetUniformLocation(prog, "fogNear"); uFogFar = gl.GetUniformLocation(prog, "fogFar"); uSky = gl.GetUniformLocation(prog, "sky");
         atlasTex = gl.GenTexture(); avgTex = gl.GenTexture();
         uAtlas = gl.GetUniformLocation(prog, "atlas"); uTrans = gl.GetUniformLocation(prog, "trans"); uAvg = gl.GetUniformLocation(prog, "avgTex");
@@ -386,6 +479,7 @@ void main(){
             gl.EnableVertexAttribArray(1); gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, st, (void*)12);
             gl.EnableVertexAttribArray(2); gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, st, (void*)20);
             gl.EnableVertexAttribArray(3); gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, st, (void*)24);
+            gl.EnableVertexAttribArray(4); gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, st, (void*)28);
             list.Add((vao, vbo, ebo, c.I.Length, c.Translucent));
             }
             meshes[key] = list;
@@ -403,12 +497,95 @@ void main(){
     public event Action<bool>? FlyChanged;
     Vector3 eye; float lookYaw, lookPitch;
     static Vector3 Dir(float y, float p) => new(MathF.Cos(y) * MathF.Cos(p), MathF.Sin(p), MathF.Sin(y) * MathF.Cos(p));
-    Vector3 Eye() => Fly ? eye : CamPos();
-    Vector3 Forward() => Fly ? Dir(lookYaw, lookPitch) : Vector3.Normalize(target - CamPos());
+    Vector3 Eye() => Fly || Walk ? eye : CamPos();
+    Vector3 Forward() => Fly || Walk ? Dir(lookYaw, lookPitch) : Vector3.Normalize(target - CamPos());
+
+    /* ---------- Laufen: wie im Spiel, mit Schwerkraft und Kollision ---------- */
+    public bool Walk { get; private set; }
+    public event Action<bool>? WalkChanged;
+    float wx, wy, wz, vy; bool onGround;   // Füße in Projekt-Koordinaten, senkrechte Geschwindigkeit
+
+    public void SetWalk(bool on)
+    {
+        var p = project; if (on == Walk || (on && p == null)) return;
+        if (on)
+        {
+            var f = Forward(); var e0 = Eye();
+            lookYaw = MathF.Atan2(f.Z, f.X); lookPitch = Math.Clamp(MathF.Asin(Math.Clamp(f.Y, -1, 1)), -1.2f, 1.2f);
+            if (Fly) { Fly = false; FlyChanged?.Invoke(false); }
+            // Einstieg: auf den Block, auf den die Kamera schaut; sonst senkrecht unter der Kamera
+            var hit = CenterBlock();
+            if (hit is { } h) { wx = h.x + .5f; wz = h.z + .5f; wy = Collision.GroundBelow(p!, wx, h.y + 1.5f, wz); }
+            else { wx = Math.Clamp(e0.X + p!.W / 2f, 0, p.W); wz = Math.Clamp(e0.Z + p.D / 2f, 0, p.D); wy = Collision.GroundBelow(p, wx, Math.Min(e0.Y, p.H), wz); }
+            for (int k = 0; k < 400 && !Collision.Free(p, wx - .3f, wx + .3f, wy, wy + 1.8f, wz - .3f, wz + .3f); k++) wy += .25f;   // nicht im Block stecken
+            vy = 0; Walk = true; SyncEye();
+            moveTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(15), DispatcherPriority.Render, (_, _) => Step());
+            lastTick = DateTime.Now; moveTimer.Start();
+        }
+        else
+        {
+            var f = Dir(lookYaw, lookPitch); target = eye + f * 6; dist = 6;
+            yaw = MathF.Atan2(-f.Z, -f.X); pitch = Math.Clamp(MathF.Asin(Math.Clamp(-f.Y, -1, 1)), -1.5f, 1.5f);
+            Walk = false;
+        }
+        WalkChanged?.Invoke(on); RequestNextFrameRendering();
+    }
+
+    void SyncEye() { var p = project!; eye = new Vector3(wx - p.W / 2f, wy + 1.62f, wz - p.D / 2f); }
+    public string WalkPos => project == null ? "" : $"X {project.OriginX + (int)MathF.Floor(wx)}  Y {project.OriginY + (int)MathF.Floor(wy)}  Z {project.OriginZ + (int)MathF.Floor(wz)}";
+
+    /// <summary>Block in der Bildmitte (Projekt-Koordinaten).</summary>
+    (int x, int y, int z)? CenterBlock()
+    {
+        var p = project; if (p == null) return null;
+        var o = Eye() + new Vector3(p.W / 2f, 0, p.D / 2f); var d = Forward();
+        for (float t = 0; t < 2000; t += .2f)
+        {
+            var q = o + d * t; int x = (int)MathF.Floor(q.X), y = (int)MathF.Floor(q.Y), z = (int)MathF.Floor(q.Z);
+            if (y < 0 && d.Y < 0) return null;
+            if (y < p.H && y >= 0 && p.At(x, y, z) != 0 && Collision.Boxes(p.At(x, y, z)).Length > 0) return (x, y, z);
+        }
+        return null;
+    }
+
+    void WalkStep(float dt)
+    {
+        var p = project; if (p == null) { SetWalk(false); return; }
+        var flat = new Vector3(MathF.Cos(lookYaw), 0, MathF.Sin(lookYaw)); var right = Vector3.Normalize(Vector3.Cross(flat, Vector3.UnitY));
+        var mv = Vector3.Zero;
+        bool fw = held.Contains(Key.W) || held.Contains(Key.Up);
+        if (fw) mv += flat; if (held.Contains(Key.S) || held.Contains(Key.Down)) mv -= flat;
+        if (held.Contains(Key.D) || held.Contains(Key.Right)) mv += right; if (held.Contains(Key.A) || held.Contains(Key.Left)) mv -= right;
+        if (mv != Vector3.Zero) mv = Vector3.Normalize(mv);
+        bool sprint = lastMods.HasFlag(KeyModifiers.Control), sneak = lastMods.HasFlag(KeyModifiers.Shift);
+        float speed = sprint ? 5.6f : sneak ? 1.3f : 4.3f;
+        int feet = p.At((int)MathF.Floor(wx), (int)MathF.Floor(wy + .1f), (int)MathF.Floor(wz)), body = p.At((int)MathF.Floor(wx), (int)MathF.Floor(wy + 1f), (int)MathF.Floor(wz));
+        bool water = Collision.Liquid(feet) || Collision.Liquid(body), climb = Collision.Climbable(feet) || Collision.Climbable(body);
+        bool jump = held.Contains(Key.Space), down = held.Contains(Key.C);
+        if (water) { speed *= .5f; vy = jump ? 2.5f : Math.Max(vy - 9 * dt, -2.2f); }
+        else if (climb) { vy = fw || jump ? 2.4f : down ? -2.4f : Math.Max(vy - 32 * dt, -1.5f); }
+        else { if (jump && onGround) vy = 8.9f; vy = Math.Max(vy - 32 * dt, -60); }
+        float dx = mv.X * speed * dt, dz = mv.Z * speed * dt, dy = vy * dt;
+        int n = Math.Max(1, (int)MathF.Ceiling(Math.Max(Math.Abs(dy), Math.Max(Math.Abs(dx), Math.Abs(dz))) / .3f));
+        bool grounded = false;
+        for (int k = 0; k < n; k++)
+        {
+            float y0 = wy;
+            var r = Collision.Move(p, wx, wy, wz, dx / n, dy / n, dz / n, onGround || grounded);
+            wx = r.x; wz = r.z; wy = r.y;
+            if (r.ground) { grounded = true; vy = Math.Max(vy, 0); if (vy > 0 && !jump) vy = 0; }
+            if (dy > 0 && wy < y0 + dy / n - 1e-3f && !r.ground) vy = 0;   // Kopf angestoßen
+        }
+        onGround = grounded || !Collision.Free(p, wx - .3f, wx + .3f, wy - .06f, wy, wz - .3f, wz + .3f);
+        if (onGround && vy < 0) vy = 0;
+        SyncEye(); RequestNextFrameRendering(); WalkMoved?.Invoke();
+    }
+    public event Action? WalkMoved;
 
     public void SetFly(bool on)
     {
         if (on == Fly) return;
+        if (on && Walk) SetWalk(false);
         if (on)
         {
             eye = CamPos(); var f = Vector3.Normalize(target - eye);
@@ -426,7 +603,7 @@ void main(){
     {
         var cam = Eye();
         var view = Matrix4x4.CreateLookAt(cam, cam + Forward(), Vector3.UnitY);
-        float near = Fly ? 0.05f : Math.Max(0.05f, dist * 0.002f), far = Math.Max(5000, (Fly ? 0 : dist) * 6 + (project == null ? 0 : Math.Max(project.W, project.D) * 3));
+        float near = Fly || Walk ? 0.05f : Math.Max(0.05f, dist * 0.002f), far = Math.Max(5000, (Fly || Walk ? 0 : dist) * 6 + (project == null ? 0 : Math.Max(project.W, project.D) * 3));
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(70 * MathF.PI / 180, Math.Max(0.1f, aspect), near, far);
         return view * proj;
     }
@@ -437,28 +614,86 @@ void main(){
         Upload();
         double sc = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
         int w = Math.Max(1, (int)(Bounds.Width * sc)), h = Math.Max(1, (int)(Bounds.Height * sc));
+        if (photoReq is { } pr) { photoReq = null; TakePhoto(pr); }
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
+        DrawScene(w, h, null);
+    }
+
+    /// <summary>Szene zeichnen; ph = Einstellungen für ein Foto (sonst die normale Ansicht).</summary>
+    unsafe void DrawScene(int w, int h, PhotoOptions? ph)
+    {
+        var gl = this.gl!;
         gl.Viewport(0, 0, (uint)w, (uint)h);
-        gl.ClearColor(Sky.X, Sky.Y, Sky.Z, 1);
+        bool nightNow = ph?.Time == PhotoTime.Night ? lightMap != null : ph == null || ph.Time == PhotoTime.AsView ? night && lightMap != null : false;
+        var skyC = ph == null || ph.Time == PhotoTime.AsView ? SkyNow() : ph.Time switch { PhotoTime.Evening => new Vector3(0.93f, 0.62f, 0.45f), PhotoTime.Night => NightSky, _ => new Vector3(0.52f, 0.72f, 1.0f) };
+        bool sOn = ph != null ? ph.Time is PhotoTime.Noon or PhotoTime.Evening : sunOn;
+        var sDir = ph?.Time == PhotoTime.Evening ? new Vector3(-0.85f, 0.32f, 0.42f) : ph != null ? new Vector3(0.45f, 0.85f, 0.35f) : sunDir;
+        gl.ClearColor(skyC.X, skyC.Y, skyC.Z, 1);
         gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         gl.Enable(EnableCap.DepthTest); gl.DepthFunc(DepthFunction.Lequal); gl.Disable(EnableCap.CullFace); gl.Disable(EnableCap.Blend);
         if (meshes.Count == 0) return;
         gl.UseProgram(prog);
         var mvp = ViewProj((float)w / h); var cam = Eye();
         gl.UniformMatrix4(uMvp, 1, false, (float*)&mvp);
-        gl.Uniform1(uCols, (float)atlasCols); gl.Uniform3(uCam, cam.X, cam.Y, cam.Z); gl.Uniform3(uSky, Sky.X, Sky.Y, Sky.Z);
+        gl.Uniform1(uCols, (float)atlasCols); gl.Uniform3(uCam, cam.X, cam.Y, cam.Z); gl.Uniform3(uSky, skyC.X, skyC.Y, skyC.Z);
+        gl.Uniform1(uNight, nightNow ? 1f : 0f); gl.Uniform1(uHiOn, hiY >= 0 && ph == null ? 1f : 0f); gl.Uniform1(uSunOn, sOn ? 1f : 0f); gl.Uniform3(uSun, sDir.X, sDir.Y, sDir.Z);
         float size = project == null ? 100 : Math.Max(project.W, project.D);
-        float fd = Fly ? size * 0.5f : dist; gl.Uniform1(uFogNear, fd * 1.2f + size * 0.6f); gl.Uniform1(uFogFar, fd * 3f + size * 1.5f + 200);
+        float fd = Fly || Walk ? size * 0.5f : dist;
+        if (ph != null && !ph.Fog) { gl.Uniform1(uFogNear, 1e6f); gl.Uniform1(uFogFar, 2e6f); }
+        else { gl.Uniform1(uFogNear, fd * 1.2f + size * 0.6f); gl.Uniform1(uFogFar, fd * 3f + size * 1.5f + 200); }
         gl.ActiveTexture(TextureUnit.Texture0); gl.BindTexture(TextureTarget.Texture2D, atlasTex); gl.Uniform1(uAtlas, 0);
         gl.ActiveTexture(TextureUnit.Texture1); gl.BindTexture(TextureTarget.Texture2D, avgTex); gl.Uniform1(uAvg, 1); gl.ActiveTexture(TextureUnit.Texture0);
+        bool Skip(string key) => ph != null && ((!ph.Guides && key is "guides") || key is "spawn" && !nightNow || (!ph.Players && key is "players"));
         // erst alles Feste, dann Wasser, Eis und farbiges Glas halb durchsichtig darüber
         gl.Uniform1(uTrans, 0f);
-        foreach (var l in meshes.Values) foreach (var m in l) if (!m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
+        foreach (var (k, l) in meshes) { if (Skip(k)) continue; foreach (var m in l) if (!m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); } }
         gl.Enable(EnableCap.Blend); gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); gl.DepthMask(false);
         gl.Uniform1(uTrans, 1f);
-        foreach (var l in meshes.Values) foreach (var m in l) if (m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); }
+        foreach (var (k, l) in meshes) { if (Skip(k)) continue; foreach (var m in l) if (m.trans) { gl.BindVertexArray(m.vao); gl.DrawElements(PrimitiveType.Triangles, (uint)m.count, DrawElementsType.UnsignedInt, (void*)0); } }
         gl.DepthMask(true); gl.Disable(EnableCap.Blend);
         gl.BindVertexArray(0);
+    }
+
+    /* ---------- Fotomodus: in eigene, große Bildfläche zeichnen und auslesen ---------- */
+    public enum PhotoTime { AsView, Noon, Evening, Night }
+    public sealed record PhotoOptions(int W, int H, PhotoTime Time, bool Fog, bool Guides, bool Players);
+    (PhotoOptions opt, TaskCompletionSource<(byte[] rgba, int w, int h)?> done)? photoReq;
+
+    /// <summary>Foto aufnehmen: RGBA-Pixel von oben nach unten, oder null, wenn die Grafikkarte das nicht kann.</summary>
+    public Task<(byte[] rgba, int w, int h)?> CapturePhoto(PhotoOptions o)
+    {
+        var tcs = new TaskCompletionSource<(byte[], int, int)?>();
+        photoReq = (o, tcs); RequestNextFrameRendering();
+        return tcs.Task;
+    }
+
+    unsafe void TakePhoto((PhotoOptions opt, TaskCompletionSource<(byte[] rgba, int w, int h)?> done) req)
+    {
+        var gl = this.gl!; var o = req.opt;
+        try
+        {
+            gl.GetInteger(GetPName.MaxRenderbufferSize, out int maxRb);
+            int w = Math.Min(o.W, maxRb), h = Math.Min(o.H, maxRb);
+            uint tex = gl.GenTexture(); gl.BindTexture(TextureTarget.Texture2D, tex);
+            gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, null);
+            uint rb = gl.GenRenderbuffer(); gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, rb);
+            gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent24, (uint)w, (uint)h);
+            uint fbo = gl.GenFramebuffer(); gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+            gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, tex, 0);
+            gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, rb);
+            if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete) throw new Exception("Bildfläche nicht möglich");
+            DrawScene(w, h, o);
+            var px = new byte[(long)w * h * 4];
+            fixed (byte* p = px) gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            gl.DeleteFramebuffer(fbo); gl.DeleteRenderbuffer(rb); gl.DeleteTexture(tex);
+            // OpenGL liest von unten nach oben
+            var flip = new byte[px.Length]; int row = w * 4;
+            for (int y = 0; y < h; y++) System.Buffer.BlockCopy(px, (h - 1 - y) * row, flip, y * row, row);
+            for (int i = 3; i < flip.Length; i += 4) flip[i] = 255;
+            req.done.TrySetResult((flip, w, h));
+        }
+        catch (Exception e) { Console.Error.WriteLine("[3D] Foto: " + e.Message); req.done.TrySetResult(null); }
     }
 
     /* ---------- Maus ---------- */
@@ -468,7 +703,7 @@ void main(){
         var pp = e.GetCurrentPoint(this); dragFrom = pp.Position; pressAt = pp.Position; moved = false;
         panning = pp.Properties.IsRightButtonPressed || pp.Properties.IsMiddleButtonPressed || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         guideDrag = false;
-        if (pp.Properties.IsLeftButtonPressed && !panning && !Fly && GuideAt(pp.Position) is { } hit)
+        if (pp.Properties.IsLeftButtonPressed && !panning && !Fly && !Walk && GuideAt(pp.Position) is { } hit)
         {   // Hilfslinie anklicken = auswählen und mit der Maus verschieben
             Select(hit.g.Id); guideDrag = hit.g.Type != "outline"; grabY = hit.y; grabCell = PlaneCell(pp.Position, grabY);
         }
@@ -501,7 +736,7 @@ void main(){
         if (dragFrom is { } from)
         {
             var d = pos - from; dragFrom = pos;
-            if (Fly)
+            if (Fly || Walk)
             {   // umsehen
                 float r = 0.0022f * MouseSens; lookYaw += (float)d.X * r; lookPitch = Math.Clamp(lookPitch - (float)d.Y * r, -1.55f, 1.55f);
             }
@@ -520,6 +755,7 @@ void main(){
     {
         base.OnPointerWheelChanged(e);
         float wd = Math.Clamp((float)e.Delta.Y, -3, 3); // Touchpads liefern teils große Sprünge
+        if (Walk) { e.Handled = true; return; }
         if (Fly) eye += Forward() * wd * Math.Max(1, Speed * 0.15f) * MouseSens;
         else dist = Math.Clamp(dist * MathF.Exp(-wd * 0.06f * MouseSens), 2, 6000);
         RequestNextFrameRendering(); e.Handled = true;
@@ -553,7 +789,9 @@ void main(){
             if (e.Key == Key.Escape) { Select(null); e.Handled = true; return; }
             if (e.Key == Key.Delete) { SelectedGuide = null; GuideDeleted?.Invoke(sg); GuideSelected?.Invoke(null); e.Handled = true; return; }
         }
-        if (e.Key == Key.F) { SetFly(!Fly); e.Handled = true; return; }
+        if (e.Key == Key.G) { SetWalk(!Walk); e.Handled = true; return; }
+        if (e.Key == Key.F) { if (Walk) { var e0 = eye; var ly = lookYaw; var lp = lookPitch; SetWalk(false); eye = e0; SetFly(true); eye = e0; lookYaw = ly; lookPitch = lp; } else SetFly(!Fly); e.Handled = true; return; }
+        if (e.Key == Key.Escape && Walk) { SetWalk(false); e.Handled = true; return; }
         if (e.Key == Key.Escape && Fly) { SetFly(false); e.Handled = true; return; }
         if (!moveKeys.Contains(e.Key)) return;
         held.Add(e.Key); e.Handled = true;
@@ -567,6 +805,7 @@ void main(){
     void Step()
     {
         var now = DateTime.Now; float dt = (float)Math.Clamp((now - lastTick).TotalSeconds, 0.001, 0.1); lastTick = now;
+        if (Walk) { WalkStep(dt); return; }
         if (held.Count == 0) { moveTimer?.Stop(); return; }
         float sp = (Fly ? Speed : Math.Max(Speed, dist * 0.12f)) * dt;
         var mods = lastMods;
