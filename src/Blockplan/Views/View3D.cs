@@ -20,7 +20,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
 {
     GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg, uTrans; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky, uNight, uSun, uSunOn, uHiOn;
     int uShaderOn, uLmvp, uShadowTex, uShadowRes, uTime, uViewport, uZenith, uLightTex, uLightOn, uLightSize, uProjOff;
-    uint lightTex3; byte[]? lightUploaded; bool lightTexOk;
+    uint lightTex3; byte[]? lightUploaded; bool lightTexOk; int uShadowTexel; float shadowTexelSize;
     uint shadowProg, skyProg, skyVao, skyVbo, shadowFbo, shadowTex; int shadowSize; bool shadersOk, shadowDirty = true; Vector3 shadowSun; Matrix4x4 lightVP;
     /// <summary>Geometrie in benannten Stücken: "r:<Bereich>" Projekt, "c:<cx>,<cz>" Umgebung, "players", "guides".</summary>
     readonly Dictionary<string, List<(uint vao, uint vbo, uint ebo, int count, bool trans)>> meshes = new();
@@ -222,14 +222,30 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     {
         var gl = this.gl!; lightUploaded = L; lightTexOk = false;
         gl.GetInteger(GetPName.Max3DTextureSize, out int max3);
-        if (p.W > max3 || p.D > max3 || p.H > max3) return;   // zu groß für diese Grafikkarte: Licht je Fläche wie bisher
-        long n = (long)p.W * p.D * p.H; if (n * 2 > int.MaxValue) return;
-        var px = new byte[n * 2];
-        for (long i = 0; i < n; i++) { int v = L[i]; px[i * 2] = (byte)((v >> 4) * 17); px[i * 2 + 1] = (byte)((v & 15) * 17); }
+        // sehr große Bauten: in X und Z gröber (je 2×2 Felder das hellste), damit es in jede Grafikkarte passt
+        int s = 1; while (((long)p.W * p.D * p.H) / ((long)s * s) > 48_000_000L || (p.W + s - 1) / s > max3 || (p.D + s - 1) / s > max3) s++;
+        if (p.H > max3 || s > 4) return;   // zu groß: Licht je Fläche wie bisher
+        int TW = (p.W + s - 1) / s, TD = (p.D + s - 1) / s, TH = p.H;
+        var px = new byte[(long)TW * TD * TH * 2];
+        long WD = (long)p.W * p.D;
+        System.Threading.Tasks.Parallel.For(0, TH, y =>
+        {
+            for (int tz = 0; tz < TD; tz++) for (int tx = 0; tx < TW; tx++)
+            {
+                int sk = 0, bk = 0;
+                for (int dz = 0; dz < s; dz++) for (int dx = 0; dx < s; dx++)
+                {
+                    int x = tx * s + dx, z = tz * s + dz; if (x >= p.W || z >= p.D) continue;
+                    int v = L[y * WD + (long)z * p.W + x]; sk = Math.Max(sk, v >> 4); bk = Math.Max(bk, v & 15);
+                }
+                long o = (((long)y * TD + tz) * TW + tx) * 2; px[o] = (byte)(sk * 17); px[o + 1] = (byte)(bk * 17);
+            }
+        });
         if (lightTex3 == 0) lightTex3 = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture3D, lightTex3);
         gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-        fixed (byte* d = px) gl.TexImage3D(TextureTarget.Texture3D, 0, InternalFormat.RG8, (uint)p.W, (uint)p.D, (uint)p.H, 0, PixelFormat.RG, PixelType.UnsignedByte, d);
+        while (gl.GetError() != GLEnum.NoError) { }
+        fixed (byte* d = px) gl.TexImage3D(TextureTarget.Texture3D, 0, InternalFormat.RG8, (uint)TW, (uint)TD, (uint)TH, 0, PixelFormat.RG, PixelType.UnsignedByte, d);
         gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
         gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
         gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
@@ -267,7 +283,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         var up = MathF.Abs(sunN.Y) > 0.99f ? Vector3.UnitZ : Vector3.UnitY;
         var view = Matrix4x4.CreateLookAt(center + sunN * r * 2, center, up);
         var proj = Matrix4x4.CreateOrthographic(2 * r, 2 * r, 0.1f, 4 * r);
-        lightVP = view * proj;
+        lightVP = view * proj; shadowTexelSize = 2 * r / res;
         gl.UseProgram(shadowProg);
         var m = lightVP; gl.UniformMatrix4(gl.GetUniformLocation(shadowProg, "lmvp"), 1, false, (float*)&m);
         gl.Uniform1(gl.GetUniformLocation(shadowProg, "cols"), (float)atlasCols);
@@ -475,9 +491,15 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         string head = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
         string vs = head + @"
 layout(location=0) in vec3 pos; layout(location=1) in vec2 tuv; layout(location=2) in float td; layout(location=3) in float fl; layout(location=4) in float li;
-uniform mat4 mvp; uniform vec3 cam; uniform mat4 lmvp;
+uniform mat4 mvp; uniform vec3 cam; uniform mat4 lmvp; uniform float shadowTexel;
 out vec2 vUv; out float vTd; out float vDist; out float vFl; out float vLi; out vec3 vPos; out vec4 vLs;
-void main(){ vUv=tuv; vTd=td; vFl=fl; vLi=li; vPos=pos; vLs=lmvp*vec4(pos,1.0); vDist=distance(pos,cam); gl_Position=mvp*vec4(pos,1.0); }";
+void main(){
+  vUv=tuv; vTd=td; vFl=fl; vLi=li; vPos=pos;
+  float t=floor((td+0.5)/8.0); float d=floor(td+0.5)-t*8.0;
+  vec3 n = d<0.5?vec3(1,0,0):(d<1.5?vec3(-1,0,0):(d<2.5?vec3(0,1,0):(d<3.5?vec3(0,-1,0):(d<4.5?vec3(0,0,1):(d<5.5?vec3(0,0,-1):vec3(0,1,0))))));
+  vLs=lmvp*vec4(pos + n*shadowTexel*1.8, 1.0);   // etwas vor der Fläche nachschauen: keine Streifen
+  vDist=distance(pos,cam); gl_Position=mvp*vec4(pos,1.0);
+}";
         string fs = head + @"
 uniform sampler2D atlas; uniform sampler2D avgTex; uniform float cols; uniform float trans; uniform float fogNear; uniform float fogFar; uniform vec3 sky;
 uniform float night; uniform vec3 sun; uniform float sunOn; uniform float hiOn;
@@ -488,7 +510,7 @@ float bright(float l){ float x=l/15.0; return mix(x/(4.0-3.0*x), x, 0.35); }
 float shadowAt(float ndl){
   vec3 p = vLs.xyz/vLs.w*0.5+0.5;
   if (p.x<0.0||p.x>1.0||p.y<0.0||p.y>1.0||p.z>1.0) return 1.0;
-  float bias = 0.0007 + 0.0028*(1.0-ndl); float s = 0.0;
+  float bias = 0.0002 + 0.0006*(1.0-ndl); float s = 0.0;
   for (int x=-1;x<=1;x++) for (int y=-1;y<=1;y++) s += (p.z-bias > texture(shadowTex, p.xy+vec2(float(x),float(y))/shadowRes).r) ? 0.0 : 1.0;
   return s/9.0;
 }
@@ -514,17 +536,17 @@ void main(){
   else if (vFl>2.5 && vFl<3.5) { a = trans<0.5 ? 1.0 : 0.55; }
   else if (vFl>3.5 && vFl<4.5) { c.rgb = mix(c.rgb, vec3(1.0,0.84,0.25), 0.38) * 1.15; }   // Bau-Anleitung: aktuelle Ebene
   vec3 col = shaderOn>0.5 && (vFl<0.5 || vFl>5.5) ? c.rgb : c.rgb*sh;
-  if (hiOn>0.5 && vFl<0.5) col *= 0.55;   // Bau-Anleitung: Fertiges dunkler, damit die neue Ebene auffällt
+  if (hiOn>0.5 && (vFl<0.5 || vFl>6.5)) col *= 0.55;   // Bau-Anleitung: Fertiges dunkler, damit die neue Ebene auffällt
   if (night>0.0 && !(shaderOn>0.5 && (vFl<0.5 || vFl>5.5))) {   // Nacht: Mondlicht von oben, warmes Licht von Fackeln & Co.
     float skyL=floor(vLi/16.0+0.001); float blk=vLi-skyL*16.0;
     vec3 L = max(vec3(0.20,0.25,0.42)*bright(skyL)+vec3(0.035), vec3(1.0,0.80,0.55)*bright(blk));
     col = mix(col, col*L, night);
   }
-  if (shaderOn>0.5 && vFl<0.5 || shaderOn>0.5 && vFl>5.5) {
+  if (shaderOn>0.5 && (vFl<0.5 || vFl>5.5)) {
     // Shader: Sonne mit Schatten, Himmelslicht (dunkler unter Dächern), warmes Blocklicht, Wasser mit Wellen
     vec3 sN = normalize(sun);
     vec3 n = d<0.5?vec3(1,0,0):(d<1.5?vec3(-1,0,0):(d<2.5?vec3(0,1,0):(d<3.5?vec3(0,-1,0):(d<4.5?vec3(0,0,1):(d<5.5?vec3(0,0,-1):vec3(0,1,0))))));
-    bool water = vFl>5.5;
+    bool water = vFl>5.5 && vFl<6.5;
     if (water && d>1.5 && d<2.5) n = normalize(vec3(sin(vPos.x*1.9+time*1.6)*0.07+sin(vPos.z*3.1-time*2.3)*0.04, 1.0, cos(vPos.z*1.7+time*1.3)*0.07+cos(vPos.x*2.7+time*1.9)*0.04));
     float ndl = max(dot(n,sN),0.0); if (d>5.5) ndl = 0.6;
     float shd = ndl>0.0 ? shadowAt(ndl) : 0.0;
@@ -532,7 +554,14 @@ void main(){
     // weiches Licht: Lichtwerte der Felder davor, zwischen den Feldern verlaufend (dunklere Ecken wie im Spiel)
     vec3 lp = vPos + projOff + (d<5.5 ? n*0.5 : vec3(0.0));
     if (lightOn>0.5 && lp.x>=0.0 && lp.z>=0.0 && lp.x<=lightSize.x && lp.z<=lightSize.z && lp.y>=0.0) {
-      vec2 lv = texture(lightTex, vec3(lp.x/lightSize.x, lp.z/lightSize.z, lp.y/lightSize.y)).rg*15.0;
+      // mehrere Proben ringsum: Licht verläuft weich und rund statt in Rauten
+      vec3 t1 = abs(n.y)>0.5 ? vec3(1,0,0) : vec3(0,1,0); vec3 t2 = cross(n,t1);
+      vec3 sc = vec3(1.0/lightSize.x, 1.0/lightSize.y, 1.0/lightSize.z);
+      vec2 acc = 2.0*texture(lightTex, (lp).xzy*sc.xzy).rg;
+      acc += texture(lightTex, (lp+t1*0.9).xzy*sc.xzy).rg + texture(lightTex, (lp-t1*0.9).xzy*sc.xzy).rg;
+      acc += texture(lightTex, (lp+t2*0.9).xzy*sc.xzy).rg + texture(lightTex, (lp-t2*0.9).xzy*sc.xzy).rg;
+      acc += texture(lightTex, (lp+n*0.8).xzy*sc.xzy).rg;
+      vec2 lv = acc/7.0*15.0;
       skyL = lp.y>lightSize.y ? 15.0 : lv.x; blk = lv.y;
     }
     float day = 1.0 - night;
@@ -541,9 +570,12 @@ void main(){
     vec3 amb = mix(vec3(0.05,0.06,0.11), mix(vec3(0.60,0.66,0.80), vec3(0.78,0.66,0.58), 1.0-clamp(sN.y*2.0,0.0,1.0)), day);
     float side = 0.82 + 0.18*n.y;
     // wie im Spiel zählt das hellere: Himmelslicht oder Licht von Fackeln & Co.
-    vec3 ind = max(amb*bright(skyL), vec3(1.0,0.80,0.56)*bright(blk)*mix(1.25,0.95,day));
+    float bl = clamp(blk/15.0,0.0,1.0); float blkB = pow(bl, 2.4)*1.15;   // weicher Verlauf, sanftes Auslaufen
+    vec3 ind = max(amb*bright(skyL), vec3(1.0,0.78,0.52)*blkB*mix(1.35,1.0,day));
     vec3 L = ind*side + sunCol*ndl*shd*clamp(skyL/8.0,0.0,1.0);
     col = c.rgb*L;
+    // Lichtquellen selbst leuchten (Fackel, Laterne, Glowstone …)
+    if (vFl>6.5) col = mix(col, c.rgb*vec3(1.15,1.05,0.9), mix(0.85,0.45,day));
     if (water) {
       vec3 v = normalize(vPos-cam); vec3 r = reflect(v,n);
       float fres = 0.10 + 0.90*pow(1.0-max(dot(-v,n),0.0),4.0);
@@ -596,7 +628,7 @@ void main(){
         catch (Exception ex) { Console.Error.WriteLine("[3D] Shader nicht verfügbar: " + ex.Message); shadersOk = false; }
         uShaderOn = gl.GetUniformLocation(prog, "shaderOn"); uLmvp = gl.GetUniformLocation(prog, "lmvp"); uShadowTex = gl.GetUniformLocation(prog, "shadowTex");
         uLightTex = gl.GetUniformLocation(prog, "lightTex"); uLightOn = gl.GetUniformLocation(prog, "lightOn"); uLightSize = gl.GetUniformLocation(prog, "lightSize"); uProjOff = gl.GetUniformLocation(prog, "projOff");
-        uShadowRes = gl.GetUniformLocation(prog, "shadowRes");
+        uShadowRes = gl.GetUniformLocation(prog, "shadowRes"); uShadowTexel = gl.GetUniformLocation(prog, "shadowTexel");
         // jede Textur-Art auf eigener Einheit: sonst stört die 3D-Lichttextur die Blocktexturen
         gl.UseProgram(prog); gl.Uniform1(uLightTex, 3); gl.Uniform1(uShadowTex, 2); gl.UseProgram(0); uTime = gl.GetUniformLocation(prog, "time"); uViewport = gl.GetUniformLocation(prog, "viewport"); uZenith = gl.GetUniformLocation(prog, "zenith");
         uMvp = gl.GetUniformLocation(prog, "mvp"); uCols = gl.GetUniformLocation(prog, "cols"); uCam = gl.GetUniformLocation(prog, "cam");
@@ -865,7 +897,7 @@ void main(){
         {
             var lm = lightVP; gl.UniformMatrix4(uLmvp, 1, false, (float*)&lm);
             gl.ActiveTexture(TextureUnit.Texture2); gl.BindTexture(TextureTarget.Texture2D, shadowTex); gl.Uniform1(uShadowTex, 2); gl.ActiveTexture(TextureUnit.Texture0);
-            gl.Uniform1(uShadowRes, (float)shadowSize); gl.Uniform1(uTime, (float)(Environment.TickCount64 % 3_600_000) / 1000f);
+            gl.Uniform1(uShadowRes, (float)shadowSize); gl.Uniform1(uShadowTexel, shadowTexelSize); gl.Uniform1(uTime, (float)(Environment.TickCount64 % 3_600_000) / 1000f);
             gl.Uniform2(uViewport, (float)w, (float)h); gl.Uniform3(uZenith, zenith.X, zenith.Y, zenith.Z);
             var lm2 = lightMap; var pp = project!;
             if (lm2 != null && lm2 != lightUploaded) UploadLight(lm2, pp);
@@ -873,7 +905,7 @@ void main(){
             gl.Uniform1(uLightOn, lightTexOk && lm2 != null && lm2 == lightUploaded ? 1f : 0f);
             gl.Uniform3(uLightSize, (float)pp.W, (float)pp.H, (float)pp.D); gl.Uniform3(uProjOff, pp.W / 2f, 0f, pp.D / 2f);
         }
-        else { var id = Matrix4x4.Identity; gl.UniformMatrix4(uLmvp, 1, false, (float*)&id); }
+        else { var id = Matrix4x4.Identity; gl.UniformMatrix4(uLmvp, 1, false, (float*)&id); gl.Uniform1(uShadowTexel, 0f); }
         gl.UniformMatrix4(uMvp, 1, false, (float*)&mvp);
         gl.Uniform1(uCols, (float)atlasCols); gl.Uniform3(uCam, cam.X, cam.Y, cam.Z); gl.Uniform3(uSky, skyC.X, skyC.Y, skyC.Z);
         gl.Uniform1(uNight, nightNow ? 1f : 0f); gl.Uniform1(uHiOn, hiY >= 0 && ph == null ? 1f : 0f); gl.Uniform1(uSunOn, sOn ? 1f : 0f); gl.Uniform3(uSun, sDir.X, sDir.Y, sDir.Z);

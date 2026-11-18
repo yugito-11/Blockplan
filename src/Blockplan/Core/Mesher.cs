@@ -56,7 +56,7 @@ public static class Mesher
     static readonly Box Full = new(0, 0, 0, 1, 1, 1);
     static readonly Box[] WaterTop = { new(0, 0, 0, 1, .875f, 1) };
     /// <summary>Zahlen je Ecke: x, y, z, u, v, td (Kachel*8 + Richtung), Kennzeichen (0 normal, 1 fehlt, 2 falsch, 3 Farbe,
-    /// 4 hervorgehobene Ebene, 5 Spawn-Markierung, 6 Wasser), Licht (Himmel*16 + Block).</summary>
+    /// 4 hervorgehobene Ebene, 5 Spawn-Markierung, 6 Wasser, 7 leuchtet selbst), Licht (Himmel*16 + Block).</summary>
     public const int Stride = 8;
     /// <summary>Licht ohne Berechnung: voller Himmel, kein Blocklicht.</summary>
     public const float DayLight = 240;
@@ -118,12 +118,12 @@ public static class Mesher
     public static List<MeshChunk> Build(Project p, int top, Atlas atlas, CancellationToken ct = default, MeshOptions? opt = null)
     {
         int n = Blocks.Count; var kind = new byte[n]; var boxes = new Box[n][]; var ft = new int[n][]; var cr = new int[n]; var bas = new int[n]; var trans = new bool[n];
-        var opq = new bool[n]; var fam = new byte[n];
+        var opq = new bool[n]; var fam = new byte[n]; var emis = new bool[n];   // leuchtende Blöcke (für den Shader)
         var bank = atlas.Mc != null && atlas.Mc.BlockStates.Count > 0 ? new ModelBank(atlas) : null;
         foreach (var v in p.CountBlocks(top).Keys)
         {
             if (Entities.IsInvisible(v)) { kind[v] = 0; continue; }   // Barriere, Licht … sieht man im Spiel nicht
-            var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v);
+            var (k, bx) = Classify(v, atlas.Mc); kind[v] = k; boxes[v] = bx; bas[v] = Blocks.BaseOf(v); emis[v] = Lighting.Emission(v) >= 10;
             opq[v] = k == 1 && !Entities.IsEntity(v);   // Truhen sind kleiner als ein Block: Nachbarn nicht verdecken
             if (k == 3) cr[v] = atlas.Cross(v); else ft[v] = atlas.Faces(v);
             if (k == 2) trans[v] = Blocks.IsWater(v) || IsSemi(atlas.Tiles[ft[v][0]]);
@@ -181,7 +181,7 @@ public static class Mesher
                     int gx = x0 + x;
                     if (clipAxis != 0 && !Vis(gx, gz)) continue;
                     if (hidden != null && hidden(i)) continue;
-                    float cellFl = y == hiY ? 4 : baseFl; curFl = cellFl;
+                    float cellFl = y == hiY ? 4 : baseFl == 0 && emis[v] ? 7 : baseFl; curFl = cellFl;
                     // Licht: eigenes Feld (für Modelle und Teilblöcke) bzw. das hellste Nachbarfeld
                     if (light != null)
                     {
@@ -220,7 +220,7 @@ public static class Mesher
                             // Nachbarn Nord, Ost, Süd, West, oben, unten
                             int[] nb = { gz > 0 ? cells[i - W0] : 0, gx + 1 < W0 ? cells[i + 1] : 0, gz + 1 < D0 ? cells[i + W0] : 0, gx > 0 ? cells[i - 1] : 0, y + 1 < H ? cells[i + SY] : 0, y > 0 ? cells[i - SY] : 0 };
                             bool[] no = new bool[6]; for (int q2 = 0; q2 < 6; q2++) no[q2] = nb[q2] != 0 && opq[nb[q2]];
-                            conn = ModelBank.ConnMask(fv, nb, no, fam);
+                            conn = fv == ModelBank.FamVine && ModelBank.SidesFromProps(v) is >= 0 and var sides ? sides : ModelBank.ConnMask(fv, nb, no, fam);
                         }
                         var qs = bank!.Get(v, conn);
                         if (p.Banners.Count > 0 && Entities.IsBanner(v) && p.Banners.TryGetValue(i, out var pat)) qs = bank.GetBanner(v, pat);
@@ -309,7 +309,7 @@ public static class Mesher
                             if ((ex[li] & bit) != 0)
                             {   // Schlüssel: Kachel, hervorgehobene Ebene, Licht – nur Gleiches wird zusammengefasst
                                 m = ft[cv[li]][d] + 1;
-                                if (c[1] == hiY) m |= 1 << 16;
+                                if (c[1] == hiY) m |= 1 << 16; else if (emis[cv[li]] && baseFl == 0) m |= 1 << 25;
                                 if (lx != null) m |= lx[li * 6 + d] << 17;
                             }
                             mask[vv * NU + uu] = m; if (m != 0) has = true;
@@ -332,7 +332,7 @@ public static class Mesher
                                 cs[e * 3] = x0 + qq[0] + ox; cs[e * 3 + 1] = qq[1]; cs[e * 3 + 2] = z0 + qq[2] + oz;
                                 uv[e * 2] = du[e, 0]; uv[e * 2 + 1] = du[e, 1];
                             }
-                            curFl = (k & (1 << 16)) != 0 ? 4 : baseFl; curL = lx != null ? (k >> 17) & 0xFF : DayLight;
+                            curFl = (k & (1 << 16)) != 0 ? 4 : (k & (1 << 25)) != 0 ? 7 : baseFl; curL = lx != null ? (k >> 17) & 0xFF : DayLight;
                             Quad(cs, uv, ((k & 0xFFFF) - 1) * 8 + d, d == 0 || d == 2 || d == 5);
                             uu += w;
                         }

@@ -45,6 +45,15 @@ public sealed class ModelBank
         if (k == "tripwire") return FamTripwire;
         return 0;
     }
+    /// <summary>Gespeicherte Seiten einer Ranke (north/east/south/west/up); -1, wenn keine angegeben sind.</summary>
+    public static int SidesFromProps(int v)
+    {
+        var pr = Blocks.Get(v).Props; if (pr == null || pr.Count == 0) return -1;
+        int m = 0; bool any = false;
+        foreach (var (k, bit) in new[] { ("north", 1), ("east", 2), ("south", 4), ("west", 8), ("up", 16), ("down", 32) })
+            if (pr.TryGetValue(k, out var val)) { any = true; if (val == "true") m |= bit; }
+        return any ? m : -1;
+    }
     public static bool IsGate(int v) => Blocks.Get(Blocks.BaseOf(v)).Key.EndsWith("_fence_gate");
     static string K(int v) => v == 0 ? "" : Blocks.Get(Blocks.BaseOf(v)).Key;
     static readonly HashSet<string> RedstoneParts = new() { "redstone_wire", "repeater", "comparator", "redstone_torch", "redstone_wall_torch", "redstone_block", "lever", "observer", "target", "daylight_detector", "lectern", "trapped_chest" };
@@ -73,8 +82,8 @@ public sealed class ModelBank
                 if (fam == FamWall && m != 5 && m != 10) m |= 16;   // Pfosten, außer bei gerader Mauer
                 return m;
             case FamVine:
-                for (int i = 0; i < 6; i++) if (nb[i] != 0 && famOf[nb[i]] != FamVine && (nOpq[i] || Blocks.Get(Blocks.BaseOf(nb[i])).Shape == 'f')) m |= 1 << i;
-                if (m == 0) m = 16;   // ohne Halt: oben, damit sie sichtbar bleibt
+                // ohne gespeicherte Seiten: nur an Wänden daneben – wie im Spiel nie als Platte an der Decke
+                for (int i = 0; i < 4; i++) if (nb[i] != 0 && famOf[nb[i]] != FamVine && (nOpq[i] || Blocks.Get(Blocks.BaseOf(nb[i])).Shape == 'f')) m |= 1 << i;
                 return m;
             case FamRedstone:
                 for (int i = 0; i < 4; i++) if (RedstoneParts.Contains(K(nb[i]))) m |= 1 << i;
