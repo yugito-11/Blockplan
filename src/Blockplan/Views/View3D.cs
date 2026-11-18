@@ -522,7 +522,7 @@ void main(){
     vec3 n = d<0.5?vec3(1,0,0):(d<1.5?vec3(-1,0,0):(d<2.5?vec3(0,1,0):(d<3.5?vec3(0,-1,0):(d<4.5?vec3(0,0,1):vec3(0,0,-1)))));
     sh = 0.42 + 0.68*max(dot(n,normalize(sun)),0.0);
   }
-  vec2 f=clamp(fract(vUv),0.002,0.998); vec2 o=vec2(floor(mod(t,cols)+0.5),floor(t/cols+0.0001)); if (o.x>=cols-0.5) { o.x=0.0; o.y+=1.0; }
+  vec2 f=clamp(fract(vUv),0.002,0.998); int ti=int(vTd+0.5)/8, ic=int(cols+0.5); vec2 o=vec2(float(ti-(ti/ic)*ic), float(ti/ic));   // ganzzahlig: exakt auf jeder Grafikkarte
   // Mipmaps je Kachel: Ableitungen aus den nicht umgebrochenen Koordinaten, Rand je nach Stufe einrücken (kein Bluten)
   vec2 gx = vec2(dFdx(vUv.x), -dFdx(vUv.y))/cols, gy = vec2(dFdy(vUv.x), -dFdy(vUv.y))/cols;
   float lod = clamp(log2(max(max(length(gx),length(gy))*cols*16.0, 1e-6)), 0.0, 4.0);
@@ -602,7 +602,7 @@ layout(location=0) in vec3 pos; layout(location=1) in vec2 tuv; layout(location=
 uniform mat4 lmvp; out vec2 vUv; out float vTd;
 void main(){ vUv=tuv; vTd=td; gl_Position=lmvp*vec4(pos,1.0); }", head + @"
 uniform sampler2D atlas; uniform float cols; in vec2 vUv; in float vTd; out vec4 o;
-void main(){ float t=floor((vTd+0.5)/8.0); vec2 f=clamp(fract(vUv),0.002,0.998); vec2 g=vec2(floor(mod(t,cols)+0.5),floor(t/cols+0.0001)); if (g.x>=cols-0.5) { g.x=0.0; g.y+=1.0; }
+void main(){ float t=floor((vTd+0.5)/8.0); vec2 f=clamp(fract(vUv),0.002,0.998); int ti=int(vTd+0.5)/8, ic=int(cols+0.5); vec2 g=vec2(float(ti-(ti/ic)*ic), float(ti/ic));
   if (textureLod(atlas,(g+vec2(f.x,1.0-f.y))/cols,0.0).a<0.5) discard; o=vec4(1.0); }");
             skyProg = Link(head + @"
 layout(location=0) in vec2 p; out vec2 vp; void main(){ vp=p; gl_Position=vec4(p,0.0,1.0); }", head + @"
