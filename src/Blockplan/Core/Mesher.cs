@@ -133,7 +133,7 @@ public static class Mesher
                 fam[v] = (byte)ModelBank.Family(v);
                 var sc = k == 1 ? bank.SimpleCube(v) : null;
                 if (sc != null) ft[v] = sc;
-                else if (bank.Get(v, 0).Length > 0 || fam[v] != 0) kind[v] = 5;
+                else if (bank.Get(v, 0).Length > 0 || fam[v] != 0) { kind[v] = 5; opq[v] = false; }   // Modell (Fackel, Schild …) verdeckt die Nachbarn nicht
             }
         }
         int W0 = p.W, D0 = p.D, H = Math.Min(top, p.H - 1) + 1; long SY = (long)W0 * D0; var cells = p.Cells;

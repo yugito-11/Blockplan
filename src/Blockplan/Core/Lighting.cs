@@ -50,7 +50,10 @@ public static class Lighting
         var b = Blocks.Get(v);
         if (b.Shape != 'f' || b.SeeThrough) return b.Shape == 's' && b.Props != null && b.Props.TryGetValue("type", out var t) && t == "double";
         if (Blocks.IsCutout(v) || Blocks.IsGlassLike(v) || Blocks.IsWater(v) || Blocks.IsLava(v)) return false;
-        return !Entities.IsEntity(v) && !Entities.IsInvisible(v);
+        if (Entities.IsEntity(v) || Entities.IsInvisible(v)) return false;
+        // Blöcke, die nicht in der Liste stehen (z. B. Wandfackeln, Wandschilder), gelten sonst als voller Würfel
+        var bx = Collision.Boxes(v);
+        return bx.Length == 1 && bx[0].X0 == 0 && bx[0].Y0 == 0 && bx[0].Z0 == 0 && bx[0].X1 == 1 && bx[0].Y1 == 1 && bx[0].Z1 == 1;
     }
 
     /// <summary>Licht für alle Felder (bis zur Höhe top). Oberhalb des Projekts ist freier Himmel.</summary>

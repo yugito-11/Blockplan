@@ -19,7 +19,8 @@ namespace Blockplan.Views;
 public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTest
 {
     GL? gl; uint prog, atlasTex, avgTex; int uAtlas, uAvg, uTrans; int uMvp, uCols, uFogNear, uFogFar, uCam, uSky, uNight, uSun, uSunOn, uHiOn;
-    int uShaderOn, uLmvp, uShadowTex, uShadowRes, uTime, uViewport, uZenith;
+    int uShaderOn, uLmvp, uShadowTex, uShadowRes, uTime, uViewport, uZenith, uLightTex, uLightOn, uLightSize, uProjOff;
+    uint lightTex3; byte[]? lightUploaded; bool lightTexOk;
     uint shadowProg, skyProg, skyVao, skyVbo, shadowFbo, shadowTex; int shadowSize; bool shadersOk, shadowDirty = true; Vector3 shadowSun; Matrix4x4 lightVP;
     /// <summary>Geometrie in benannten Stücken: "r:<Bereich>" Projekt, "c:<cx>,<cz>" Umgebung, "players", "guides".</summary>
     readonly Dictionary<string, List<(uint vao, uint vbo, uint ebo, int count, bool trans)>> meshes = new();
@@ -60,7 +61,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         bool other = p != project; project = p; atlas = a; top = topY;
         if (p != null && refit) Fit();
         if (other) { lightMap = null; spawnSpots = new(); hidden = null; hiY = -1; }
-        if (night && p != null) SetNight(true, showSpawns); else Rebuild();
+        if ((night || Shaders) && p != null && (other || lightMap == null || lightTop != topY)) ComputeLight(); else Rebuild();
     }
 
     public void SetTop(int topY) => SetTop(topY, hiY);
@@ -69,7 +70,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     {
         if (topY == top && highlight == hiY) return;
         bool topChanged = topY != top; top = topY; hiY = highlight;
-        if (night && topChanged) SetNight(true, showSpawns); else Rebuild();
+        if ((night || Shaders) && topChanged) ComputeLight(); else Rebuild();
     }
     public void ShowSpawns(bool on) { showSpawns = on; RebuildExtras(false); RequestNextFrameRendering(); }
 
@@ -130,7 +131,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     MeshOptions? Options(HashSet<int>? regions)
     {
         var p = project; var lv = live;
-        var o = new MeshOptions { Regions = regions, HighlightY = hiY, ClipAxis = clipAxis, ClipPos = clipPos, ClipKeepHigh = clipHigh, Light = night || ShaderActive ? lightMap : null, Hidden = hidden };
+        var o = new MeshOptions { Regions = regions, HighlightY = hiY, ClipAxis = clipAxis, ClipPos = clipPos, ClipKeepHigh = clipHigh, Light = night || Shaders ? lightMap : null, Hidden = hidden };
         if (progress && hidden == null && lv != null && lv.Known && p != null) o.Status = (x, y, z, v) => lv.Status(p, x, y, z, v);
         return o;
     }
@@ -159,7 +160,7 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
     public void SetNight(bool on, bool spawns)
     {
         bool lightChanged = on != night; night = on; showSpawns = spawns;
-        if (!on && !ShaderActive) { spawnSpots = new(); if (lightChanged) Rebuild(); else RebuildExtras(false); return; }
+        if (!on && !Shaders) { spawnSpots = new(); if (lightChanged) Rebuild(); else RebuildExtras(false); return; }
         if (!on) { spawnSpots = new(); Rebuild(); return; }
         ComputeLight();
     }
@@ -172,9 +173,10 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         Task.Run(() =>
         {
             var L = Lighting.Compute(p, t); var sp = Lighting.SpawnSpots(p, L, t);
+            if (Environment.GetEnvironmentVariable("BLOCKPLAN_DEBUGLIGHT") is { } dl) foreach (var c in dl.Split(';')) { var q = c.Split(',').Select(int.Parse).ToArray(); var i = p.Index(q[0], q[1], q[2]); Console.Error.WriteLine($"[Licht] {c}: Block {Blocks.Get(p.Cells[i] == 0 ? 0 : p.Cells[i])?.Key} Himmel {L[i] >> 4} Block {L[i] & 15}"); }
             Dispatcher.UIThread.Post(() =>
             {
-                if (project != p || !(night || ShaderActive)) return;
+                if (project != p || !(night || Shaders)) return;
                 lightMap = L; spawnSpots = night ? sp : new(); lightTop = t; Rebuild(); LightReady?.Invoke();
             });
         });
@@ -213,6 +215,29 @@ public sealed class View3D : OpenGlControlBase, Avalonia.Rendering.ICustomHitTes
         var hz = Vector3.Lerp(new Vector3(1.0f, 0.60f, 0.42f), new Vector3(0.70f, 0.82f, 1.0f), e);
         var zn = Vector3.Lerp(new Vector3(0.30f, 0.38f, 0.72f), new Vector3(0.22f, 0.47f, 0.95f), e);
         return (hz, zn);
+    }
+
+    /// <summary>Licht je Feld als 3D-Textur (Himmel, Block), damit es auf den Flächen weich verläuft.</summary>
+    unsafe void UploadLight(byte[] L, Project p)
+    {
+        var gl = this.gl!; lightUploaded = L; lightTexOk = false;
+        gl.GetInteger(GetPName.Max3DTextureSize, out int max3);
+        if (p.W > max3 || p.D > max3 || p.H > max3) return;   // zu groß für diese Grafikkarte: Licht je Fläche wie bisher
+        long n = (long)p.W * p.D * p.H; if (n * 2 > int.MaxValue) return;
+        var px = new byte[n * 2];
+        for (long i = 0; i < n; i++) { int v = L[i]; px[i * 2] = (byte)((v >> 4) * 17); px[i * 2 + 1] = (byte)((v & 15) * 17); }
+        if (lightTex3 == 0) lightTex3 = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture3D, lightTex3);
+        gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+        fixed (byte* d = px) gl.TexImage3D(TextureTarget.Texture3D, 0, InternalFormat.RG8, (uint)p.W, (uint)p.D, (uint)p.H, 0, PixelFormat.RG, PixelType.UnsignedByte, d);
+        gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+        gl.BindTexture(TextureTarget.Texture3D, 0);
+        lightTexOk = gl.GetError() == GLEnum.NoError;
     }
 
     /// <summary>Schattenkarte aus Sicht der Sonne zeichnen (nur feste Blöcke).</summary>
@@ -457,6 +482,7 @@ void main(){ vUv=tuv; vTd=td; vFl=fl; vLi=li; vPos=pos; vLs=lmvp*vec4(pos,1.0); 
 uniform sampler2D atlas; uniform sampler2D avgTex; uniform float cols; uniform float trans; uniform float fogNear; uniform float fogFar; uniform vec3 sky;
 uniform float night; uniform vec3 sun; uniform float sunOn; uniform float hiOn;
 uniform float shaderOn; uniform sampler2D shadowTex; uniform float shadowRes; uniform float time; uniform vec2 viewport; uniform vec3 cam; uniform vec3 zenith;
+uniform highp sampler3D lightTex; uniform float lightOn; uniform vec3 lightSize; uniform vec3 projOff;
 in vec2 vUv; in float vTd; in float vDist; in float vFl; in float vLi; in vec3 vPos; in vec4 vLs; out vec4 outColor;
 float bright(float l){ float x=l/15.0; return mix(x/(4.0-3.0*x), x, 0.35); }
 float shadowAt(float ndl){
@@ -503,13 +529,20 @@ void main(){
     float ndl = max(dot(n,sN),0.0); if (d>5.5) ndl = 0.6;
     float shd = ndl>0.0 ? shadowAt(ndl) : 0.0;
     float skyL=floor(vLi/16.0+0.001); float blk=vLi-skyL*16.0;
+    // weiches Licht: Lichtwerte der Felder davor, zwischen den Feldern verlaufend (dunklere Ecken wie im Spiel)
+    vec3 lp = vPos + projOff + (d<5.5 ? n*0.5 : vec3(0.0));
+    if (lightOn>0.5 && lp.x>=0.0 && lp.z>=0.0 && lp.x<=lightSize.x && lp.z<=lightSize.z && lp.y>=0.0) {
+      vec2 lv = texture(lightTex, vec3(lp.x/lightSize.x, lp.z/lightSize.z, lp.y/lightSize.y)).rg*15.0;
+      skyL = lp.y>lightSize.y ? 15.0 : lv.x; blk = lv.y;
+    }
     float day = 1.0 - night;
-    float ao = mix(0.22, 1.0, bright(skyL));
-    vec3 sunCol = mix(vec3(1.0,0.55,0.32), vec3(1.0,0.95,0.86), clamp(sN.y*2.2,0.0,1.0));
-    sunCol = mix(vec3(0.30,0.36,0.55)*0.55, sunCol*1.25, day);
-    vec3 amb = mix(vec3(0.045,0.055,0.10), mix(vec3(0.55,0.62,0.80), vec3(0.75,0.62,0.55), 1.0-clamp(sN.y*2.0,0.0,1.0)), day);
-    float side = 0.80 + 0.20*n.y;
-    vec3 L = amb*ao*side + sunCol*ndl*shd + vec3(1.0,0.78,0.52)*bright(blk)*mix(1.4,0.35,day);
+    vec3 sunCol = mix(vec3(1.0,0.58,0.36), vec3(1.0,0.96,0.90), clamp(sN.y*2.2,0.0,1.0));
+    sunCol = mix(vec3(0.30,0.36,0.55)*0.5, sunCol*0.62, day);
+    vec3 amb = mix(vec3(0.05,0.06,0.11), mix(vec3(0.60,0.66,0.80), vec3(0.78,0.66,0.58), 1.0-clamp(sN.y*2.0,0.0,1.0)), day);
+    float side = 0.82 + 0.18*n.y;
+    // wie im Spiel zählt das hellere: Himmelslicht oder Licht von Fackeln & Co.
+    vec3 ind = max(amb*bright(skyL), vec3(1.0,0.80,0.56)*bright(blk)*mix(1.25,0.95,day));
+    vec3 L = ind*side + sunCol*ndl*shd*clamp(skyL/8.0,0.0,1.0);
     col = c.rgb*L;
     if (water) {
       vec3 v = normalize(vPos-cam); vec3 r = reflect(v,n);
@@ -520,10 +553,10 @@ void main(){
       col += sunCol*pow(max(dot(r,sN),0.0),180.0)*2.0*shd;
       a = mix(0.78, 0.95, fres);
     }
-    col = aces(col*1.08);
-    col = mix(vec3(dot(col,vec3(0.299,0.587,0.114))), col, 1.12);
+    col = col*1.06/(1.0+0.12*col);   // sanft begrenzen, Texturfarben bleiben kräftig
+    col = mix(vec3(dot(col,vec3(0.299,0.587,0.114))), col, 1.10);
   }
-  else if (shaderOn>0.5) col = aces(col*0.95);
+  else if (shaderOn>0.5) col = col*1.0/(1.0+0.1*col);
   if (vFl>4.5 && vFl<5.5) { col = vec3(1.0,0.2,0.25); a = 0.85; }   // Spawn-Stelle
   vec3 outc = mix(col,sky,fog);
   if (shaderOn>0.5) { vec2 uv = gl_FragCoord.xy/viewport; outc *= mix(0.80, 1.0, smoothstep(0.95, 0.35, length(uv-0.5))); }
@@ -562,7 +595,10 @@ void main(){
         }
         catch (Exception ex) { Console.Error.WriteLine("[3D] Shader nicht verfügbar: " + ex.Message); shadersOk = false; }
         uShaderOn = gl.GetUniformLocation(prog, "shaderOn"); uLmvp = gl.GetUniformLocation(prog, "lmvp"); uShadowTex = gl.GetUniformLocation(prog, "shadowTex");
-        uShadowRes = gl.GetUniformLocation(prog, "shadowRes"); uTime = gl.GetUniformLocation(prog, "time"); uViewport = gl.GetUniformLocation(prog, "viewport"); uZenith = gl.GetUniformLocation(prog, "zenith");
+        uLightTex = gl.GetUniformLocation(prog, "lightTex"); uLightOn = gl.GetUniformLocation(prog, "lightOn"); uLightSize = gl.GetUniformLocation(prog, "lightSize"); uProjOff = gl.GetUniformLocation(prog, "projOff");
+        uShadowRes = gl.GetUniformLocation(prog, "shadowRes");
+        // jede Textur-Art auf eigener Einheit: sonst stört die 3D-Lichttextur die Blocktexturen
+        gl.UseProgram(prog); gl.Uniform1(uLightTex, 3); gl.Uniform1(uShadowTex, 2); gl.UseProgram(0); uTime = gl.GetUniformLocation(prog, "time"); uViewport = gl.GetUniformLocation(prog, "viewport"); uZenith = gl.GetUniformLocation(prog, "zenith");
         uMvp = gl.GetUniformLocation(prog, "mvp"); uCols = gl.GetUniformLocation(prog, "cols"); uCam = gl.GetUniformLocation(prog, "cam");
         uHiOn = gl.GetUniformLocation(prog, "hiOn"); uNight = gl.GetUniformLocation(prog, "night"); uSun = gl.GetUniformLocation(prog, "sun"); uSunOn = gl.GetUniformLocation(prog, "sunOn");
         uFogNear = gl.GetUniformLocation(prog, "fogNear"); uFogFar = gl.GetUniformLocation(prog, "fogFar"); uSky = gl.GetUniformLocation(prog, "sky");
@@ -592,6 +628,7 @@ void main(){
         foreach (var l in meshes.Values) foreach (var m in l) { gl.DeleteVertexArray(m.vao); gl.DeleteBuffer(m.vbo); gl.DeleteBuffer(m.ebo); }
         meshes.Clear(); gl.DeleteProgram(prog);
         if (shadowFbo != 0) { gl.DeleteFramebuffer(shadowFbo); gl.DeleteTexture(shadowTex); shadowFbo = 0; }
+        if (lightTex3 != 0) { gl.DeleteTexture(lightTex3); lightTex3 = 0; lightUploaded = null; }
         if (shadersOk) { gl.DeleteProgram(shadowProg); gl.DeleteProgram(skyProg); gl.DeleteVertexArray(skyVao); gl.DeleteBuffer(skyVbo); } gl.DeleteTexture(atlasTex); gl.DeleteTexture(avgTex); gl = null;
     }
 
@@ -830,6 +867,11 @@ void main(){
             gl.ActiveTexture(TextureUnit.Texture2); gl.BindTexture(TextureTarget.Texture2D, shadowTex); gl.Uniform1(uShadowTex, 2); gl.ActiveTexture(TextureUnit.Texture0);
             gl.Uniform1(uShadowRes, (float)shadowSize); gl.Uniform1(uTime, (float)(Environment.TickCount64 % 3_600_000) / 1000f);
             gl.Uniform2(uViewport, (float)w, (float)h); gl.Uniform3(uZenith, zenith.X, zenith.Y, zenith.Z);
+            var lm2 = lightMap; var pp = project!;
+            if (lm2 != null && lm2 != lightUploaded) UploadLight(lm2, pp);
+            gl.ActiveTexture(TextureUnit.Texture3); gl.BindTexture(TextureTarget.Texture3D, lightTex3); gl.Uniform1(uLightTex, 3); gl.ActiveTexture(TextureUnit.Texture0);
+            gl.Uniform1(uLightOn, lightTexOk && lm2 != null && lm2 == lightUploaded ? 1f : 0f);
+            gl.Uniform3(uLightSize, (float)pp.W, (float)pp.H, (float)pp.D); gl.Uniform3(uProjOff, pp.W / 2f, 0f, pp.D / 2f);
         }
         else { var id = Matrix4x4.Identity; gl.UniformMatrix4(uLmvp, 1, false, (float*)&id); }
         gl.UniformMatrix4(uMvp, 1, false, (float*)&mvp);
