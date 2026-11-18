@@ -696,8 +696,7 @@ void main(){
             }
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 4);
             while (gl.GetError() != GLEnum.NoError) { }
-            gl.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, 8f);   // anisotrop (wenn die Grafikkarte es kann)
-            while (gl.GetError() != GLEnum.NoError) { }
+            // keine anisotrope Filterung: unter Windows (Direct3D) macht sie auch nahe Texturen weich statt pixelscharf
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
