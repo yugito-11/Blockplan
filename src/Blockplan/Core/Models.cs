@@ -84,7 +84,8 @@ public sealed class ModelBank
             case FamVine:
                 // ohne gespeicherte Seiten: nur an Wänden daneben – wie im Spiel nie als Platte an der Decke
                 for (int i = 0; i < 4; i++) if (nb[i] != 0 && famOf[nb[i]] != FamVine && (nOpq[i] || Blocks.Get(Blocks.BaseOf(nb[i])).Shape == 'f')) m |= 1 << i;
-                return m;
+                // frei hängend: ein einzelner senkrechter Vorhang (ohne Seiten zeigt das Spiel sonst einen Kasten mit Deckel)
+                return m == 0 ? 1 : m;
             case FamRedstone:
                 for (int i = 0; i < 4; i++) if (RedstoneParts.Contains(K(nb[i]))) m |= 1 << i;
                 if (m is 1 or 4) m = 5; else if (m is 2 or 8) m = 10;   // einzelne Verbindung läuft wie im Spiel gerade durch

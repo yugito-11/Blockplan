@@ -39,7 +39,11 @@ class Program
             foreach (var f in args[1..]) { var p = Core.Project.FromJson(System.IO.File.ReadAllText(f)); st.Save(p); Console.WriteLine("importiert: " + p.Name); }
             return 0;
         }
-        return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        // Abstürze ins Protokoll schreiben (%LOCALAPPDATA%\Blockplan\blockplan.log), damit man sie finden kann
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Core.McAssets.Log("ABSTURZ: " + e.ExceptionObject);
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, e) => { Core.McAssets.Log("Fehler im Hintergrund: " + e.Exception); e.SetObserved(); };
+        try { return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
+        catch (Exception e) { Core.McAssets.Log("ABSTURZ: " + e); throw; }
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.

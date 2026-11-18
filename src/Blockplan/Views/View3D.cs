@@ -527,7 +527,7 @@ void main(){
   // weit weg: Durchschnittsfarbe der Kachel statt Pixelrauschen
   float tpp=16.0*max(length(dFdx(vUv)),length(dFdy(vUv)));
   vec3 avg=texelFetch(avgTex,ivec2(int(o.x),int(o.y)),0).rgb;
-  c.rgb=mix(c.rgb,avg,clamp((tpp-0.8)/2.5,0.0,1.0));
+  c.rgb=mix(c.rgb,avg,clamp((tpp-0.45)/1.3,0.0,1.0));   // flach/weit weg: ruhige Durchschnittsfarbe statt Streifen (wie Mipmaps)
   float fog=clamp((vDist-fogNear)/(fogFar-fogNear),0.0,1.0);
   float a = trans<0.5 ? 1.0 : max(c.a,0.45);
   // Baufortschritt: fehlt = hellblau durchscheinend, falsch = rot; Hilfslinien/Farben halb durchsichtig
@@ -842,6 +842,12 @@ void main(){
     protected override unsafe void OnOpenGlRender(GlInterface gi, int fb)
     {
         if (gl == null) return;
+        try { RenderFrame(fb); }
+        catch (Exception e) { McAssets.Log("3D-Zeichnen: " + e); }
+    }
+
+    unsafe void RenderFrame(int fb)
+    {
         Upload();
         double sc = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
         int w = Math.Max(1, (int)(Bounds.Width * sc)), h = Math.Max(1, (int)(Bounds.Height * sc));
@@ -861,7 +867,7 @@ void main(){
         {
             var p = project!; float r = 0.5f * MathF.Sqrt((float)p.W * p.W + (float)p.H * p.H + (float)p.D * p.D);
             gl.GetInteger(GetPName.MaxTextureSize, out int maxTex);
-            int res = Math.Min(maxTex, ph != null ? 4096 : r > 140 ? 4096 : 2048);
+            int res = Math.Min(maxTex, r > 140 ? 4096 : 2048);
             if (shadowDirty || shadowSun != sunN || shadowSize != res) RenderShadow(sunN, res);
             gl.BindFramebuffer(FramebufferTarget.Framebuffer, targetFb);
         }

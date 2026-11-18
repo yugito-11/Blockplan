@@ -60,34 +60,59 @@ public static class Lighting
     public static byte[] Compute(Project p, int top = int.MaxValue)
     {
         int W = p.W, D = p.D, H = Math.Min(top, p.H - 1) + 1; long WD = (long)W * D, N = WD * H;
-        var cells = p.Cells; var light = new byte[p.Cells.LongLength];
+        var cells = p.Cells;
         var opaque = new bool[Blocks.Count]; var em = new byte[Blocks.Count];
         foreach (var v in p.CountBlocks(top).Keys) { opaque[v] = Stops(v); em[v] = (byte)Emission(v); }
-        // Himmel: von oben herab, bis zum ersten undurchsichtigen Block volle Stärke
-        var sky = new byte[N]; var blk = new byte[N];
-        var q = new Queue<long>();
-        for (long c = 0; c < WD; c++)
-            for (int y = H - 1; y >= 0; y--)
-            {
-                long i = y * WD + c; if (opaque[cells[i]]) break;
-                sky[i] = 15; q.Enqueue(i);
-            }
-        Spread(sky, q, cells, opaque, W, D, H);
-        for (long i = 0; i < N; i++) { int e = em[cells[i]]; if (e > 0) { blk[i] = (byte)e; q.Enqueue(i); } }
-        Spread(blk, q, cells, opaque, W, D, H);
-        for (long i = 0; i < N; i++) light[i] = (byte)(sky[i] << 4 | blk[i]);
+        // Ergebnis: Himmel im oberen, Block im unteren Halbbyte – direkt im Ergebnis gerechnet (spart Speicher bei großen Bauten)
+        var light = new byte[p.Cells.LongLength];
         for (long i = N; i < light.LongLength; i++) light[i] = 0xF0;
+        // Himmel: von oben herab bis zum ersten undurchsichtigen Block volle Stärke
+        for (long c = 0; c < WD; c++)
+            for (int y = H - 1; y >= 0; y--) { long i = y * WD + c; if (opaque[cells[i]]) break; light[i] = 0xF0; }
+        // nur Ränder des Himmelslichts weitergeben (Felder mit 15 neben dunkleren): kleine Warteschlange
+        var q = new IntQueue();
+        for (long i = 0; i < N; i++)
+        {
+            if (light[i] >> 4 != 15) continue;
+            int x = (int)(i % W), z = (int)(i / W % D), y = (int)(i / WD);
+            bool edge = (x > 0 && Dark(i - 1)) || (x + 1 < W && Dark(i + 1)) || (z > 0 && Dark(i - W)) || (z + 1 < D && Dark(i + W)) || (y > 0 && Dark(i - WD));
+            if (edge) q.Push(i);
+        }
+        bool Dark(long j) => light[j] >> 4 < 14 && !opaque[cells[j]];
+        Spread(light, true, q, cells, opaque, W, D, H);
+        for (long i = 0; i < N; i++) { int e = em[cells[i]]; if (e > 0) { light[i] = (byte)(light[i] & 0xF0 | e); q.Push(i); } }
+        Spread(light, false, q, cells, opaque, W, D, H);
         return light;
     }
 
-    static void Spread(byte[] L, Queue<long> q, ushort[] cells, bool[] opaque, int W, int D, int H)
+    /// <summary>Warteschlange für Feldnummern (int reicht bis 2 Mrd. Felder), wächst nur bei Bedarf.</summary>
+    sealed class IntQueue
+    {
+        int[] a = new int[1 << 16]; int head, tail, count;
+        public int Count => count;
+        public void Push(long v)
+        {
+            if (count == a.Length)
+            {
+                var b = new int[a.Length * 2];
+                for (int k = 0; k < count; k++) b[k] = a[(head + k) % a.Length];
+                a = b; head = 0; tail = count;
+            }
+            a[tail] = (int)v; tail = (tail + 1) % a.Length; count++;
+        }
+        public long Pop() { int v = a[head]; head = (head + 1) % a.Length; count--; return (uint)v; }
+    }
+
+    static void Spread(byte[] L, bool sky, IntQueue q, ushort[] cells, bool[] opaque, int W, int D, int H)
     {
         long WD = (long)W * D;
+        int Get(long j) => sky ? L[j] >> 4 : L[j] & 15;
+        void Set(long j, int v) => L[j] = sky ? (byte)(L[j] & 15 | v << 4) : (byte)(L[j] & 0xF0 | v);
         while (q.Count > 0)
         {
-            long i = q.Dequeue(); int l = L[i]; if (l <= 1) continue;
+            long i = q.Pop(); int l = Get(i); if (l <= 1) continue;
             int x = (int)(i % W), z = (int)(i / W % D), y = (int)(i / WD);
-            void To(long j) { if (L[j] < l - 1 && !opaque[cells[j]]) { L[j] = (byte)(l - 1); q.Enqueue(j); } }
+            void To(long j) { if (Get(j) < l - 1 && !opaque[cells[j]]) { Set(j, l - 1); q.Push(j); } }
             if (x > 0) To(i - 1); if (x + 1 < W) To(i + 1);
             if (z > 0) To(i - W); if (z + 1 < D) To(i + W);
             if (y > 0) To(i - WD); if (y + 1 < H) To(i + WD);
