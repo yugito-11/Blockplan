@@ -523,11 +523,11 @@ void main(){
     sh = 0.42 + 0.68*max(dot(n,normalize(sun)),0.0);
   }
   vec2 f=clamp(fract(vUv),0.002,0.998); vec2 o=vec2(floor(mod(t,cols)+0.5),floor(t/cols+0.0001)); if (o.x>=cols-0.5) { o.x=0.0; o.y+=1.0; }
-  vec4 c=texture(atlas,(o+vec2(f.x,1.0-f.y))/cols); if(trans<0.5 ? c.a<0.5 : c.a<0.02) discard;
-  // weit weg: Durchschnittsfarbe der Kachel statt Pixelrauschen
-  float tpp=16.0*max(length(dFdx(vUv)),length(dFdy(vUv)));
-  vec3 avg=texelFetch(avgTex,ivec2(int(o.x+0.5),int(o.y+0.5)),0).rgb;   // runden, nicht abschneiden: manche Grafikkarten rechnen 38,9999 statt 39
-  c.rgb=mix(c.rgb,avg,clamp((tpp-0.45)/1.3,0.0,1.0));   // flach/weit weg: ruhige Durchschnittsfarbe statt Streifen (wie Mipmaps)
+  // Mipmaps je Kachel: Ableitungen aus den nicht umgebrochenen Koordinaten, Rand je nach Stufe einrücken (kein Bluten)
+  vec2 gx = vec2(dFdx(vUv.x), -dFdx(vUv.y))/cols, gy = vec2(dFdy(vUv.x), -dFdy(vUv.y))/cols;
+  float lod = clamp(log2(max(max(length(gx),length(gy))*cols*16.0, 1e-6)), 0.0, 4.0);
+  float hm = 0.5*exp2(lod)/16.0; vec2 g = clamp(vec2(f.x,1.0-f.y), hm, 1.0-hm);
+  vec4 c=textureGrad(atlas,(o+g)/cols,gx,gy); if(trans<0.5 ? c.a<0.5 : c.a<0.02) discard;
   float fog=clamp((vDist-fogNear)/(fogFar-fogNear),0.0,1.0);
   float a = trans<0.5 ? 1.0 : max(c.a,0.45);
   // Baufortschritt: fehlt = hellblau durchscheinend, falsch = rot; Hilfslinien/Farben halb durchsichtig
@@ -603,7 +603,7 @@ uniform mat4 lmvp; out vec2 vUv; out float vTd;
 void main(){ vUv=tuv; vTd=td; gl_Position=lmvp*vec4(pos,1.0); }", head + @"
 uniform sampler2D atlas; uniform float cols; in vec2 vUv; in float vTd; out vec4 o;
 void main(){ float t=floor((vTd+0.5)/8.0); vec2 f=clamp(fract(vUv),0.002,0.998); vec2 g=vec2(floor(mod(t,cols)+0.5),floor(t/cols+0.0001)); if (g.x>=cols-0.5) { g.x=0.0; g.y+=1.0; }
-  if (texture(atlas,(g+vec2(f.x,1.0-f.y))/cols).a<0.5) discard; o=vec4(1.0); }");
+  if (textureLod(atlas,(g+vec2(f.x,1.0-f.y))/cols,0.0).a<0.5) discard; o=vec4(1.0); }");
             skyProg = Link(head + @"
 layout(location=0) in vec2 p; out vec2 vp; void main(){ vp=p; gl_Position=vec4(p,0.0,1.0); }", head + @"
 uniform mat4 invVP; uniform vec3 sun; uniform vec3 horizon; uniform vec3 zenith; uniform float night; in vec2 vp; out vec4 o;
@@ -661,6 +661,7 @@ void main(){
         meshes.Clear(); gl.DeleteProgram(prog);
         if (shadowFbo != 0) { gl.DeleteFramebuffer(shadowFbo); gl.DeleteTexture(shadowTex); shadowFbo = 0; }
         if (lightTex3 != 0) { gl.DeleteTexture(lightTex3); lightTex3 = 0; lightUploaded = null; }
+        if (msaaFbo != 0) { gl.DeleteFramebuffer(msaaFbo); gl.DeleteRenderbuffer(msaaColor); gl.DeleteRenderbuffer(msaaDepth); msaaFbo = 0; }
         if (shadersOk) { gl.DeleteProgram(shadowProg); gl.DeleteProgram(skyProg); gl.DeleteVertexArray(skyVao); gl.DeleteBuffer(skyVbo); } gl.DeleteTexture(atlasTex); gl.DeleteTexture(avgTex); gl = null;
     }
 
@@ -676,7 +677,28 @@ void main(){
             int S = a.cols * Atlas.T; atlasCols = a.cols;
             gl!.BindTexture(TextureTarget.Texture2D, atlasTex);
             fixed (byte* p = a.px) gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)S, (uint)S, 0, PixelFormat.Rgba, PixelType.UnsignedByte, p);
-            gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            // verkleinerte Stufen (16, 8, 4, 2, 1 Pixel je Kachel) – jede Kachel für sich, mit Alpha gewichtet
+            var lv = a.px; int ls = S;
+            for (int level = 1; level <= 4; level++)
+            {
+                int ns = ls / 2; var nx = new byte[ns * ns * 4];
+                for (int y = 0; y < ns; y++) for (int x = 0; x < ns; x++)
+                {
+                    int r = 0, g = 0, b = 0, al = 0;
+                    for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++)
+                    { int o = (((y * 2 + dy) * ls) + x * 2 + dx) * 4; int aa = lv[o + 3]; r += lv[o] * aa; g += lv[o + 1] * aa; b += lv[o + 2] * aa; al += aa; }
+                    int d = (y * ns + x) * 4;
+                    if (al > 0) { nx[d] = (byte)(r / al); nx[d + 1] = (byte)(g / al); nx[d + 2] = (byte)(b / al); }
+                    nx[d + 3] = (byte)Math.Min(255, al / 4 * 5 / 4);   // Laub & Co. dünnen in der Ferne nicht aus
+                }
+                fixed (byte* p = nx) gl.TexImage2D(TextureTarget.Texture2D, level, InternalFormat.Rgba, (uint)ns, (uint)ns, 0, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+                lv = nx; ls = ns;
+            }
+            gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 4);
+            while (gl.GetError() != GLEnum.NoError) { }
+            gl.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, 8f);   // anisotrop (wenn die Grafikkarte es kann)
+            while (gl.GetError() != GLEnum.NoError) { }
+            gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
@@ -852,8 +874,47 @@ void main(){
         double sc = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
         int w = Math.Max(1, (int)(Bounds.Width * sc)), h = Math.Max(1, (int)(Bounds.Height * sc));
         if (photoReq is { } pr) { photoReq = null; TakePhoto(pr); }
+        var gl = this.gl!;
+        // Kantenglättung: in eine mehrfach abgetastete Fläche zeichnen und geglättet ins Fenster übertragen
+        if (msaaOk && EnsureMsaa(w, h))
+        {
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, msaaFbo);
+            DrawScene(w, h, null, msaaFbo);
+            gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, msaaFbo);
+            gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
+            gl.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
+            if (gl.GetError() is var err && err != GLEnum.NoError) { msaaOk = false; McAssets.Log("Kantenglättung aus: " + err); }
+            return;
+        }
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
         DrawScene(w, h, null, (uint)fb);
+    }
+
+    uint msaaFbo, msaaColor, msaaDepth; int msaaW, msaaH; bool msaaOk = true;
+
+    /// <summary>Mehrfach abgetastete Zeichenfläche in Fenstergröße (4×, sonst so viel die Grafikkarte kann).</summary>
+    bool EnsureMsaa(int w, int h)
+    {
+        var gl = this.gl!;
+        if (msaaFbo != 0 && msaaW == w && msaaH == h) return true;
+        try
+        {
+            if (msaaFbo != 0) { gl.DeleteFramebuffer(msaaFbo); gl.DeleteRenderbuffer(msaaColor); gl.DeleteRenderbuffer(msaaDepth); msaaFbo = 0; }
+            while (gl.GetError() != GLEnum.NoError) { }
+            gl.GetInteger((GetPName)0x8D57, out int maxS); int samples = Math.Min(4, maxS);   // 0x8D57 = höchste Abtastzahl
+            if (samples < 2) { msaaOk = false; return false; }
+            msaaColor = gl.GenRenderbuffer(); gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, msaaColor);
+            gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)samples, InternalFormat.Rgba8, (uint)w, (uint)h);
+            msaaDepth = gl.GenRenderbuffer(); gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, msaaDepth);
+            gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)samples, InternalFormat.DepthComponent24, (uint)w, (uint)h);
+            msaaFbo = gl.GenFramebuffer(); gl.BindFramebuffer(FramebufferTarget.Framebuffer, msaaFbo);
+            gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, msaaColor);
+            gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, msaaDepth);
+            if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete || gl.GetError() != GLEnum.NoError) { msaaOk = false; return false; }
+            msaaW = w; msaaH = h; return true;
+        }
+        catch (Exception e) { McAssets.Log("Kantenglättung nicht möglich: " + e.Message); msaaOk = false; return false; }
     }
 
     /// <summary>Szene zeichnen; ph = Einstellungen für ein Foto (sonst die normale Ansicht).</summary>
@@ -960,7 +1021,32 @@ void main(){
             gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, tex, 0);
             gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, rb);
             if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete) throw new Exception("Bildfläche nicht möglich");
-            DrawScene(w, h, o, fbo);
+            // geglättet: erst mehrfach abgetastet zeichnen, dann ins Bild übertragen
+            uint mf = 0, mc = 0, md = 0;
+            if (msaaOk)
+            {
+                while (gl.GetError() != GLEnum.NoError) { }
+                gl.GetInteger((GetPName)0x8D57, out int maxS); int smp = Math.Min(4, maxS);
+                if (smp >= 2)
+                {
+                    mc = gl.GenRenderbuffer(); gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, mc); gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)smp, InternalFormat.Rgba8, (uint)w, (uint)h);
+                    md = gl.GenRenderbuffer(); gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, md); gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)smp, InternalFormat.DepthComponent24, (uint)w, (uint)h);
+                    mf = gl.GenFramebuffer(); gl.BindFramebuffer(FramebufferTarget.Framebuffer, mf);
+                    gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, mc);
+                    gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, md);
+                    if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete || gl.GetError() != GLEnum.NoError)
+                    { gl.DeleteFramebuffer(mf); gl.DeleteRenderbuffer(mc); gl.DeleteRenderbuffer(md); mf = 0; gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo); }
+                }
+            }
+            if (mf != 0)
+            {
+                DrawScene(w, h, o, mf);
+                gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, mf); gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, fbo);
+                gl.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+                gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+                gl.DeleteFramebuffer(mf); gl.DeleteRenderbuffer(mc); gl.DeleteRenderbuffer(md);
+            }
+            else DrawScene(w, h, o, fbo);
             var px = new byte[(long)w * h * 4];
             fixed (byte* p = px) gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
             gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
