@@ -16,6 +16,7 @@ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -31,6 +32,32 @@ public class BlockplanLiveClient implements ClientModInitializer {
 	private static boolean told = false;
 
 	static KeyMapping keyShow, keyMode, keyUp, keyDown, keyChest, keyHud;
+
+	/** Oben rechts neben dem Kisten-Fenster; passt es nicht daneben, dann darüber. */
+	static int btnX(AbstractContainerScreen<?> cs, int w) {
+		var a = (de.blockplan.live.mixin.ContainerScreenAccess) cs;
+		int right = a.blockplan$left() + a.blockplan$width();
+		return right + 4 + 120 <= w ? right + 4 : right - 120;
+	}
+	static int btnY(AbstractContainerScreen<?> cs) {
+		var a = (de.blockplan.live.mixin.ContainerScreenAccess) cs;
+		int right = a.blockplan$left() + a.blockplan$width();
+		return right + 4 + 120 <= cs.width ? a.blockplan$top() : Math.max(2, a.blockplan$top() - 22);
+	}
+
+	static Component chestLabel(boolean on) {
+		return Component.literal(on ? "Lagerkiste ✓ (entfernen)" : "+ Als Lagerkiste");
+	}
+
+	/** Inhalt der Kiste (ohne das eigene Inventar). */
+	static java.util.Map<net.minecraft.world.item.Item, Integer> contents(AbstractContainerScreen<?> cs) {
+		var m = new java.util.HashMap<net.minecraft.world.item.Item, Integer>();
+		for (var slot : cs.getMenu().slots) {
+			if (slot.container instanceof net.minecraft.world.entity.player.Inventory) continue;
+			var st = slot.getItem(); if (!st.isEmpty()) m.merge(st.getItem(), st.getCount(), Integer::sum);
+		}
+		return m;
+	}
 
 	@Override
 	public void onInitializeClient() {
@@ -49,15 +76,17 @@ public class BlockplanLiveClient implements ClientModInitializer {
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("blockplan", "bauen"), Hud::render);
 		UseBlockCallback.EVENT.register((player, world, hand, hit) -> { if (world.isClientSide()) Build.lastUsed = hit.getBlockPos(); return InteractionResult.PASS; });
 		ScreenEvents.AFTER_INIT.register((client, screen, w, h) -> {
-			if (!(screen instanceof AbstractContainerScreen<?> cs) || Build.lastUsed == null || !Build.isMarked(Build.lastUsed)) return;
-			ScreenEvents.remove(screen).register(sc -> {
-				var m = new java.util.HashMap<net.minecraft.world.item.Item, Integer>();
-				for (var slot : cs.getMenu().slots) {
-					if (slot.container instanceof net.minecraft.world.entity.player.Inventory) continue;   // nur die Kiste, nicht das eigene Inventar
-					var st = slot.getItem(); if (!st.isEmpty()) m.merge(st.getItem(), st.getCount(), Integer::sum);
-				}
-				Build.containerSeen(m);
-			});
+			if (!(screen instanceof AbstractContainerScreen<?> cs) || !Build.isContainerAt(Build.lastUsed)) return;
+			var pos = Build.lastUsed;
+			// Knopf oben rechts: Kiste als Lagerkiste hinzufügen oder entfernen
+			var btn = net.minecraft.client.gui.components.Button.builder(chestLabel(Build.isMarked(pos)), b -> {
+				boolean on = Build.toggleChestAt(pos, contents(cs));
+				b.setMessage(chestLabel(on));
+			}).bounds(btnX(cs, w), btnY(cs), 120, 20)
+			  .tooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal("Blockplan zählt den Inhalt von Lagerkisten zur Materialliste dazu.")))
+			  .build();
+			Screens.getWidgets(screen).add(btn);
+			ScreenEvents.remove(screen).register(sc -> { if (Build.isMarked(pos)) Build.containerSeen(contents(cs)); });
 		});
 		BlockplanLive.levels = () -> {
 			Minecraft mc = Minecraft.getInstance();

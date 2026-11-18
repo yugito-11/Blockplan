@@ -4,5 +4,6 @@
 	"package": "de.blockplan.live.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": ["LevelChunkMixin"],
+	"client": ["ContainerScreenAccess"],
 	"injectors": { "defaultRequire": 1 }
 }

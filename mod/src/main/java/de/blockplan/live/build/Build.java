@@ -114,6 +114,21 @@ public final class Build {
 		saveStorage(); pushState();
 	}
 
+	/** Kiste an der Lage pos an- oder abmelden (Knopf im Kisten-Fenster); gibt zurück, ob sie jetzt Lagerkiste ist. */
+	public static boolean toggleChestAt(BlockPos pos, Map<Item, Integer> contents)
+	{
+		var mc = Minecraft.getInstance(); if (mc.level == null) return false;
+		long k = chestKey(mc.level, pos);
+		boolean on;
+		if (chests.remove(k)) { chestItems.remove(k); on = false; msg("Blockplan: Lagerkiste entfernt (" + chests.size() + " Lagerkisten)"); }
+		else { chests.add(k); chestItems.put(k, contents); on = true; msg("Blockplan: Lagerkiste hinzugefügt (" + chests.size() + " Lagerkisten)"); }
+		saveStorage(); pushState(); return on;
+	}
+
+	public static boolean isContainerAt(BlockPos pos) {
+		var mc = Minecraft.getInstance(); return mc.level != null && pos != null && isContainer(mc.level.getBlockState(pos));
+	}
+
 	static boolean isContainer(BlockState s) {
 		var id = BuiltInRegistries.BLOCK.getKey(s.getBlock()).getPath();
 		return id.contains("chest") || id.equals("barrel") || id.endsWith("shulker_box");
