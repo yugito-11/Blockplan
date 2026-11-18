@@ -106,10 +106,20 @@ public static class SelfTest
                 bool eq = back.W == ent.W && back.H == ent.H && back.D == ent.D;
                 if (eq) for (long k = 0; k < ent.Cells.LongLength; k++) if (back.Cells[k] != ent.Cells[k]) { eq = false; break; }
                 Ok(eq && back.Count == nb && back.Banners.Count == ent.Banners.Count, $"Export .schem: {nb:N0} Blöcke, {bytes.Length / 1024:N0} KB, wieder eingelesen gleich, Banner {back.Banners.Count}");
+                var lb = SchemExport.BuildLitematic(ent, 0, 0, 0, ent.W - 1, ent.H - 1, ent.D - 1, null, 4440, out var nl);
+                var tmpl = Path.Combine(Path.GetTempPath(), "blockplan-export-test.litematic"); File.WriteAllBytes(tmpl, lb);
+                var lback = SchematicReader.Load(tmpl); File.Delete(tmpl);
+                bool leq = lback.W == ent.W && lback.H == ent.H && lback.D == ent.D;
+                if (leq) for (long k = 0; k < ent.Cells.LongLength; k++) if (lback.Cells[k] != ent.Cells[k]) { leq = false; break; }
+                Ok(leq && lback.Count == nl, $"Export .litematic: {nl:N0} Blöcke, {lb.Length / 1024:N0} KB, wieder eingelesen gleich");
                 var bpx = SchematicReader.ToProject(bnr, 0, 0, 0, bnr.W - 1, bnr.H - 1, bnr.D - 1, false, false, 0);
                 var bb = SchemExport.Build(bpx, 0, 0, 0, bpx.W - 1, bpx.H - 1, bpx.D - 1, null, 4440, out _);
                 var tmp2 = Path.Combine(Path.GetTempPath(), "blockplan-export-banner.schem"); File.WriteAllBytes(tmp2, bb);
                 var bback = SchematicReader.Load(tmp2); File.Delete(tmp2);
+                var lbb = SchemExport.BuildLitematic(bpx, 0, 0, 0, bpx.W - 1, bpx.H - 1, bpx.D - 1, null, 4440, out _);
+                var tmp3 = Path.Combine(Path.GetTempPath(), "blockplan-export-banner.litematic"); File.WriteAllBytes(tmp3, lbb);
+                var lbback = SchematicReader.Load(tmp3); File.Delete(tmp3);
+                Ok(lbback.Banners.Count == bpx.Banners.Count && lbback.Banners.All(kv => bpx.Banners.TryGetValue(kv.Key, out var o) && o == kv.Value), $"Litematic mit Bannermustern: {lbback.Banners.Count} von {bpx.Banners.Count}");
                 Ok(bback.Banners.Count == bpx.Banners.Count && bpx.Banners.Count > 0 && bback.Banners.All(kv => bpx.Banners.TryGetValue(kv.Key, out var o) && o == kv.Value), $"Export mit Bannermustern: {bback.Banners.Count} von {bpx.Banners.Count}");
             }
 

@@ -56,7 +56,7 @@ public static class Mesher
     static readonly Box Full = new(0, 0, 0, 1, 1, 1);
     static readonly Box[] WaterTop = { new(0, 0, 0, 1, .875f, 1) };
     /// <summary>Zahlen je Ecke: x, y, z, u, v, td (Kachel*8 + Richtung), Kennzeichen (0 normal, 1 fehlt, 2 falsch, 3 Farbe,
-    /// 4 hervorgehobene Ebene, 5 Spawn-Markierung), Licht (Himmel*16 + Block).</summary>
+    /// 4 hervorgehobene Ebene, 5 Spawn-Markierung, 6 Wasser), Licht (Himmel*16 + Block).</summary>
     public const int Stride = 8;
     /// <summary>Licht ohne Berechnung: voller Himmel, kein Blocklicht.</summary>
     public const float DayLight = 240;
@@ -262,6 +262,7 @@ public static class Mesher
                         any = true; continue;
                     }
                     var f = ft[v]; int bv = bas[v]; curT = trans[v];
+                    if (cellFl == baseFl && baseFl == 0 && Blocks.IsWater(v)) curFl = 6;   // Wasser: für den Shader (Wellen, Spiegelung)
                     bool Same(long j, bool inb) => inb && VisI(j) && bas[cells[j]] == bv && kind[cells[j]] == 2 && boxes[cells[j]].Length == 1 && boxes[cells[j]][0] == Full;
                     bool isFull = boxes[v].Length == 1 && boxes[v][0] == Full;
                     var bxs = boxes[v];

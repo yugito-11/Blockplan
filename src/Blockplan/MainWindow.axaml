@@ -94,6 +94,8 @@
           <ToggleButton x:Name="WalkBtn" Content="🚶 Laufen (G)" Foreground="White" Padding="10,4" ToolTip.Tip="Durch den Bau laufen wie im Spiel: WASD, Leertaste springen, Strg rennen"/>
           <ToggleButton x:Name="NightBtn" Content="☾ Nacht" Foreground="White" Padding="10,4" ToolTip.Tip="Nachts leuchten nur Fackeln, Laternen &amp; Co."/>
           <CheckBox x:Name="SpawnChk" Content="Spawn-Stellen" Foreground="White" IsChecked="True" IsVisible="False" ToolTip.Tip="Rote Kreuze: dort ist es so dunkel, dass Monster erscheinen können"/>
+          <ToggleButton x:Name="ShaderBtn" Content="✨ Shader" Foreground="White" Padding="10,4" ToolTip.Tip="Schöne Grafik: Schatten der Sonne, Himmel mit Verlauf, Wasser mit Wellen und Spiegelung, dunklere Innenräume"/>
+          <Slider x:Name="SunSlider" Minimum="3" Maximum="177" Value="55" Width="100" VerticalAlignment="Center" IsVisible="False" ToolTip.Tip="Sonnenstand: links Morgen, Mitte Mittag, rechts Abend"/>
           <Button x:Name="PhotoBtn" Content="📷 Foto" Foreground="White" Padding="10,4" ToolTip.Tip="Ein schönes, großes Bild der Ansicht speichern"/>
           <TextBlock x:Name="LightInfo" Foreground="#FFB4B4" VerticalAlignment="Center" FontSize="12"/>
         </StackPanel>
@@ -145,7 +147,7 @@
               </ComboBox>
               <TextBox x:Name="MatSearch" PlaceholderText="Block suchen …" Width="220" Margin="0,0,8,6"/>
               <Button x:Name="BtnMatCopy" Content="Liste kopieren" Margin="0,0,8,6" ToolTip.Tip="Als Text in die Zwischenablage, z. B. für Discord"/>
-              <Button x:Name="BtnExport" Content="Als .schem exportieren …" Margin="0,0,8,6" ToolTip.Tip="Den gewählten Teil (ganzes Projekt, Etappe oder Bauplan) für WorldEdit oder Litematica speichern"/>
+              <Button x:Name="BtnExport" Content="Exportieren (.litematic / .schem) …" Margin="0,0,8,6" ToolTip.Tip="Den gewählten Teil (ganzes Projekt, Etappe oder Bauplan) für WorldEdit oder Litematica speichern"/>
               <Button x:Name="BtnUndo" Content="↶ Ersetzen rückgängig" Margin="0,0,8,6" IsVisible="False"/>
             </WrapPanel>
             <Border x:Name="MatSpace" Background="{DynamicResource SunkBrush}" CornerRadius="10" Padding="12,8" HorizontalAlignment="Left">

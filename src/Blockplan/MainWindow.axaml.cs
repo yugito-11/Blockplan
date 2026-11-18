@@ -153,6 +153,13 @@ public partial class MainWindow : Window
         };
         View3.WalkMoved += () => ShowHover("Du stehst bei " + View3.WalkPos);
         PhotoBtn.Click += async (_, _) => await TakePhoto();
+        ShaderBtn.Click += (_, _) =>
+        {
+            bool on = ShaderBtn.IsChecked == true;
+            View3.SetShaders(on); SunSlider.IsVisible = on; store.Set("shaders", on ? "1" : "0");
+            if (on && !View3.ShadersAvailable) DispatcherTimer.RunOnce(() => { if (!View3.ShadersAvailable) { ShowHover("Deine Grafikkarte unterstützt die Shader leider nicht."); } }, TimeSpan.FromSeconds(1));
+        };
+        SunSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { View3.SunAngle = (float)SunSlider.Value; if (!loadingUi) store.Set("sun", SunSlider.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); } };
     }
 
     async Task TakePhoto()
@@ -889,6 +896,8 @@ public partial class MainWindow : Window
     {
         Updater.CleanUp(); _ = CheckUpdate();
         RefreshList(); UpdateDbInfo();
+        if (double.TryParse(store.Get("sun"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var sa)) SunSlider.Value = sa;
+        if (store.Get("shaders") == "1" || Environment.GetEnvironmentVariable("BLOCKPLAN_SHADERS") == "1") { ShaderBtn.IsChecked = true; SunSlider.IsVisible = true; View3.SetShaders(true); }
         if (double.TryParse(store.Get("mouse"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ms)) MouseSlider.Value = ms;
         _ = LoadTextures(null);
         var last = store.Get("last"); var list = store.List();
@@ -1311,18 +1320,26 @@ public partial class MainWindow : Window
         var safe = string.Join("_", (p.Name + (parts != null ? " " + what.Replace("„", "").Replace("“", "") : "")).Split(Path.GetInvalidFileNameChars()));
         var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "Als Schematic speichern", SuggestedFileName = safe + ".schem", DefaultExtension = "schem",
-            FileTypeChoices = new[] { new FilePickerFileType("WorldEdit-Schematic") { Patterns = new[] { "*.schem" } } },
+            Title = "Als Schematic speichern", SuggestedFileName = safe + ".litematic", DefaultExtension = "litematic",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("Litematica (.litematic)") { Patterns = new[] { "*.litematic" } },
+                new FilePickerFileType("WorldEdit / Sponge (.schem)") { Patterns = new[] { "*.schem" } },
+            },
         });
         if (f == null || f.TryGetLocalPath() is not { } path) return;
+        bool lite = !path.EndsWith(".schem", StringComparison.OrdinalIgnoreCase);
+        if (lite && !path.EndsWith(".litematic", StringComparison.OrdinalIgnoreCase)) path += ".litematic";
         Busy("Speichere Schematic …");
         try
         {
             int dv = mc?.DataVersion > 0 ? mc.DataVersion : 4440;
-            var (bytes, n) = await Task.Run(() => { var b = SchemExport.Build(p, x0, y0, z0, x1, y1, z1, keep, dv, out var c); return (b, c); });
+            var (bytes, n) = await Task.Run(() => { long c; var b = lite ? SchemExport.BuildLitematic(p, x0, y0, z0, x1, y1, z1, keep, dv, out c) : SchemExport.Build(p, x0, y0, z0, x1, y1, z1, keep, dv, out c); return (b, c); });
             await File.WriteAllBytesAsync(path, bytes);
             Busy(null);
-            await Message("Schematic gespeichert", $"{n:N0} Blöcke ({x1 - x0 + 1}×{y1 - y0 + 1}×{z1 - z0 + 1}) in {Path.GetFileName(path)}.\n\nIn WorldEdit: Datei in den Ordner schematics legen, dann //schem load {Path.GetFileNameWithoutExtension(path)} und //paste. In Litematica: in den Ordner schematics legen und laden.\n\nDie Ecke unten im Nordwesten ist der Einfügepunkt.");
+            await Message("Schematic gespeichert", $"{n:N0} Blöcke ({x1 - x0 + 1}×{y1 - y0 + 1}×{z1 - z0 + 1}) in {Path.GetFileName(path)}.\n\n" + (lite
+                ? "Litematica: Datei in den Ordner .minecraft\\schematics legen, im Spiel M + Ladebildschirm öffnen, laden und platzieren. Die Ecke unten im Nordwesten ist der Ursprung."
+                : $"WorldEdit: Datei in den Ordner schematics legen, dann //schem load {Path.GetFileNameWithoutExtension(path)} und //paste. Die Ecke unten im Nordwesten ist der Einfügepunkt."));
         }
         catch (Exception e) { Busy(null); await Message("Speichern fehlgeschlagen", e.Message); }
     }

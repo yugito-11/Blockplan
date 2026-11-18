@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Blockplan.Core;
 
@@ -54,5 +55,73 @@ public static class SchemExport
             ["BlockEntities"] = bes,
         };
         return Nbt.Write("Schematic", root);
+    }
+
+    /// <summary>Dasselbe als Litematica-Datei (.litematic, Version 6): eine Region, Blockzustände dicht gepackt.</summary>
+    public static byte[] BuildLitematic(Project p, int x0, int y0, int z0, int x1, int y1, int z1, Func<int, int, int, bool>? keep, int dataVersion, out long blocks)
+    {
+        int W = x1 - x0 + 1, H = y1 - y0 + 1, L = z1 - z0 + 1;
+        if (W <= 0 || H <= 0 || L <= 0) throw new ArgumentException("Leerer Bereich.");
+        long n = (long)W * H * L;
+        var pid = new Dictionary<int, int> { [0] = 0 };
+        var palette = new List<Dictionary<string, object>> { new() { ["Name"] = "minecraft:air" } };
+        var ids = new int[n]; var tes = new List<Dictionary<string, object>>();
+        blocks = 0; long k = 0;
+        for (int y = 0; y < H; y++) for (int z = 0; z < L; z++) for (int x = 0; x < W; x++, k++)
+        {
+            int px = x0 + x, py = y0 + y, pz = z0 + z;
+            int v = p.At(px, py, pz);
+            if (v != 0 && keep != null && !keep(px, py, pz)) v = 0;
+            if (!pid.TryGetValue(v, out var id))
+            {
+                id = palette.Count; pid[v] = id;
+                var b = Blocks.Get(v); var name = Blocks.Get(b.Base).Key; if (!name.Contains(':')) name = "minecraft:" + name;
+                var e = new Dictionary<string, object> { ["Name"] = name };
+                if (b.Props is { Count: > 0 }) e["Properties"] = b.Props.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                palette.Add(e);
+            }
+            ids[k] = id; if (v != 0) blocks++;
+            if (v != 0 && p.Banners.Count > 0 && p.Banners.TryGetValue(p.Index(px, py, pz), out var pat))
+            {
+                var list = new List<Dictionary<string, object>>();
+                foreach (var part in pat.Split('|', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var kv = part.Split(':'); if (kv.Length != 2) continue;
+                    list.Add(new Dictionary<string, object> { ["pattern"] = "minecraft:" + kv[0], ["color"] = kv[1] });
+                }
+                if (list.Count > 0) tes.Add(new Dictionary<string, object> { ["x"] = x, ["y"] = y, ["z"] = z, ["id"] = "minecraft:banner", ["patterns"] = list });
+            }
+        }
+        // Bits je Eintrag; Werte laufen über die Grenzen der 64-Bit-Zahlen hinweg (wie in Litematica)
+        int bits = Math.Max(2, 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)Math.Max(0, palette.Count - 1)));
+        var packed = new long[(n * bits + 63) / 64];
+        for (long i = 0; i < n; i++)
+        {
+            ulong val = (ulong)ids[i]; long sb = i * bits; int li = (int)(sb >> 6), off = (int)(sb & 63);
+            packed[li] = (long)((ulong)packed[li] | (val << off));
+            if (off + bits > 64) packed[li + 1] = (long)((ulong)packed[li + 1] | (val >> (64 - off)));
+        }
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var region = new Dictionary<string, object>
+        {
+            ["Position"] = new Dictionary<string, object> { ["x"] = 0, ["y"] = 0, ["z"] = 0 },
+            ["Size"] = new Dictionary<string, object> { ["x"] = W, ["y"] = H, ["z"] = L },
+            ["BlockStatePalette"] = palette, ["BlockStates"] = packed,
+            ["TileEntities"] = tes, ["Entities"] = new List<Dictionary<string, object>>(),
+            ["PendingBlockTicks"] = new List<Dictionary<string, object>>(), ["PendingFluidTicks"] = new List<Dictionary<string, object>>(),
+        };
+        var root = new Dictionary<string, object>
+        {
+            ["MinecraftDataVersion"] = dataVersion, ["Version"] = 6, ["SubVersion"] = 1,
+            ["Metadata"] = new Dictionary<string, object>
+            {
+                ["Name"] = p.Name, ["Author"] = "Blockplan", ["Description"] = "Aus Blockplan exportiert", ["RegionCount"] = 1,
+                ["TotalVolume"] = (int)Math.Min(n, int.MaxValue), ["TotalBlocks"] = (int)Math.Min(blocks, int.MaxValue),
+                ["TimeCreated"] = now, ["TimeModified"] = now,
+                ["EnclosingSize"] = new Dictionary<string, object> { ["x"] = W, ["y"] = H, ["z"] = L },
+            },
+            ["Regions"] = new Dictionary<string, object> { [string.IsNullOrWhiteSpace(p.Name) ? "Blockplan" : p.Name] = region },
+        };
+        return Nbt.Write("", root);
     }
 }

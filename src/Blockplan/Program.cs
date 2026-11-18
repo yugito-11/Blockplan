@@ -21,6 +21,12 @@ class Program
             Console.WriteLine($"aktuell {Core.Updater.CurrentText} → " + (r == null ? "kein Update" : $"Update {r.Version}, {r.Size} Bytes, {r.Url}"));
             return 0;
         }
+        if (args.Length >= 3 && args[0] == "--export")
+        {   // Projekt (.json) als .litematic oder .schem speichern (zum Testen)
+            var p = Core.Project.FromJson(System.IO.File.ReadAllText(args[1])); long n;
+            var b = args[2].EndsWith(".schem") ? Core.SchemExport.Build(p, 0, 0, 0, p.W - 1, p.H - 1, p.D - 1, null, 4440, out n) : Core.SchemExport.BuildLitematic(p, 0, 0, 0, p.W - 1, p.H - 1, p.D - 1, null, 4440, out n);
+            System.IO.File.WriteAllBytes(args[2], b); Console.WriteLine($"{n} Blöcke, {p.W}x{p.H}x{p.D}"); return 0;
+        }
         if (args.Length >= 2 && args[0] == "--import-schem")
         {   // Schematic ohne Dialog vollständig übernehmen (zum Testen)
             using var st = new Core.Store();
