@@ -12,6 +12,9 @@ using System.Threading.Tasks;
 
 namespace Blockplan.Core;
 
+/// <summary>Bauen nach Plan im Spiel: was die Mod meldet.</summary>
+public sealed record BauState(string Plan, bool Show, bool LayerMode, int Layer, long Placed, long Total, bool Scanned, int Chests, Dictionary<string, int> Inventory, Dictionary<string, int> Storage);
+
 public sealed record LivePlayer(string Name, string Uuid, string Dim, double X, double Y, double Z, double Yaw);
 
 /// <summary>Ein Chunk vom „aktuellen Stand“: die Oberfläche der echten Welt rund um die Spieler.</summary>
@@ -51,6 +54,38 @@ public sealed class LiveClient : IDisposable
     readonly HashSet<(int, int)> dirtyChunks = new();
     public event Action? Changed;         // aus dem Hintergrund-Thread, gebündelt
     public event Action? PlayersChanged;
+    /// <summary>Stand des Bauens im Spiel (nur im eigenen Spiel mit der Mod), sonst null.</summary>
+    public BauState? Bau { get; private set; }
+    public event Action? BauChanged;
+
+    /// <summary>Plan ins Spiel schicken (Projekt-JSON mit Startecke); gibt eine Fehlermeldung zurück oder null.</summary>
+    public async Task<string?> SendPlan(string json)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/api/plan") { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
+            req.Headers.Add("X-Blockplan-Token", Token);
+            using var cl = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            var res = await cl.SendAsync(req);
+            if (res.StatusCode == System.Net.HttpStatusCode.NotFound) return "Das geht nur, wenn die Mod im eigenen Spiel läuft (nicht auf dem Server). Verbinde dich mit dem Link aus dem Chat im Spiel.";
+            return res.IsSuccessStatusCode ? null : "Die Mod antwortet mit Fehler " + (int)res.StatusCode + ": " + await res.Content.ReadAsStringAsync();
+        }
+        catch (Exception e) { return "Keine Verbindung zum Spiel: " + e.Message; }
+    }
+
+    /// <summary>Ansicht im Spiel setzen: sichtbar, Ebene oder ganzer Plan, Ebene (lokal).</summary>
+    public async Task SendView(bool show, bool layerMode, int layer)
+    {
+        try
+        {
+            var body = $"{{\"show\":{(show ? "true" : "false")},\"mode\":\"{(layerMode ? "layer" : "all")}\",\"layer\":{layer}}}";
+            using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/api/view") { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
+            req.Headers.Add("X-Blockplan-Token", Token);
+            using var cl = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            await cl.SendAsync(req);
+        }
+        catch { }
+    }
     public event Action? StatusChanged;
 
     CancellationTokenSource? cts;
@@ -195,6 +230,16 @@ public sealed class LiveClient : IDisposable
                             if (i < 0 || i >= w.LongLength) continue;
                             w[i] = v < pa.Length ? pa[v] : (ushort)0; dirty.Add(i);
                         }
+                    break;
+                }
+                case "bau":
+                {   // Bauen nach Plan im eigenen Spiel: Ansicht, Fortschritt, Inventar und Lagerkisten
+                    using var doc = JsonDocument.Parse(data); var r = doc.RootElement;
+                    Dictionary<string, int> Items(string k) { var d = new Dictionary<string, int>(); if (r.TryGetProperty(k, out var o)) foreach (var e in o.EnumerateObject()) d[e.Name] = e.Value.GetInt32(); return d; }
+                    Bau = new BauState(r.GetProperty("plan").GetString() ?? "", r.GetProperty("show").GetBoolean(), r.GetProperty("mode").GetString() == "layer",
+                        r.GetProperty("layer").GetInt32(), r.GetProperty("placed").GetInt64(), r.GetProperty("total").GetInt64(), r.GetProperty("scanned").GetBoolean(),
+                        r.GetProperty("chests").GetInt32(), Items("inv"), Items("lager"));
+                    BauChanged?.Invoke();
                     break;
                 }
                 case "players":

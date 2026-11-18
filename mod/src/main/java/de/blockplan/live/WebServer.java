@@ -105,6 +105,18 @@ final class WebServer {
 				overlay = new String(body, StandardCharsets.UTF_8).replace('\n', ' ');
 				for (Client c : BlockplanLive.clients) c.send("overlay", overlay);
 				send(ex, 200, "application/json", "{\"ok\":true}");
+			} else if (path.equals("/api/plan") && "POST".equals(ex.getRequestMethod())) {
+				if (BlockplanLive.planHandler == null) { send(ex, 404, "application/json", "{\"error\":\"nur im eigenen Spiel\"}"); return; }
+				String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+				try { BlockplanLive.planHandler.accept(body); } catch (Exception e) { send(ex, 400, "application/json", "{\"error\":\"" + BlockplanLive.jsonEsc(e.toString()) + "\"}"); return; }
+				send(ex, 200, "application/json", "{\"ok\":true}");
+			} else if (path.equals("/api/plan") && "DELETE".equals(ex.getRequestMethod())) {
+				if (BlockplanLive.planClear != null) BlockplanLive.planClear.run();
+				send(ex, 200, "application/json", "{\"ok\":true}");
+			} else if (path.equals("/api/view") && "POST".equals(ex.getRequestMethod())) {
+				if (BlockplanLive.viewHandler == null) { send(ex, 404, "application/json", "{}"); return; }
+				BlockplanLive.viewHandler.accept(new String(ex.getRequestBody().readNBytes(10_000), StandardCharsets.UTF_8));
+				send(ex, 200, "application/json", "{\"ok\":true}");
 			} else if (path.equals("/api/stand/reset") && "POST".equals(ex.getRequestMethod())) {
 				if (!isAdmin(ex)) { send(ex, 403, "application/json", "{\"error\":\"admin\"}"); return; }
 				Stand.reset();
@@ -169,6 +181,7 @@ final class WebServer {
 		c.send("hello", "{\"worlds\":" + BlockplanLive.worldsJson + ",\"local\":" + BlockplanLive.clientMode + "}");
 		c.send("players", BlockplanLive.playersJson);
 		c.send("overlay", overlay);
+		if (BlockplanLive.bauJson != null) c.send("bau", BlockplanLive.bauJson);
 		for (String j : Stand.chunks.values()) c.send("chunk", j);
 		BlockplanLive.clients.add(c);
 		int w = num(q, "w"), h = num(q, "h"), d = num(q, "d");

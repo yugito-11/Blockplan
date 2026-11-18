@@ -9,6 +9,19 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
+import de.blockplan.live.build.Build;
+import de.blockplan.live.build.GhostRenderer;
+import de.blockplan.live.build.Hud;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionResult;
+import com.mojang.blaze3d.platform.InputConstants;
 
 /**
  * Blockplan im eigenen Spiel (z. B. Modrinth): Die Website läuft auf diesem PC unter localhost und zeigt,
@@ -17,8 +30,35 @@ import java.util.List;
 public class BlockplanLiveClient implements ClientModInitializer {
 	private static boolean told = false;
 
+	static KeyMapping keyShow, keyMode, keyUp, keyDown, keyChest, keyHud;
+
 	@Override
 	public void onInitializeClient() {
+		// Bauen nach Plan (Ersatz für Litematica)
+		BlockplanLive.planHandler = Build::setPlanJson;
+		BlockplanLive.viewHandler = Build::setViewJson;
+		BlockplanLive.planClear = () -> Minecraft.getInstance().execute(Build::clear);
+		var cat = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("blockplan", "bauen"));
+		keyShow = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.show", InputConstants.KEY_B, cat));
+		keyMode = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.mode", InputConstants.KEY_N, cat));
+		keyUp = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.up", InputConstants.KEY_PAGEUP, cat));
+		keyDown = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.down", InputConstants.KEY_PAGEDOWN, cat));
+		keyChest = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.chest", InputConstants.KEY_K, cat));
+		keyHud = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.blockplan.hud", InputConstants.KEY_J, cat));
+		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::render);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("blockplan", "bauen"), Hud::render);
+		UseBlockCallback.EVENT.register((player, world, hand, hit) -> { if (world.isClientSide()) Build.lastUsed = hit.getBlockPos(); return InteractionResult.PASS; });
+		ScreenEvents.AFTER_INIT.register((client, screen, w, h) -> {
+			if (!(screen instanceof AbstractContainerScreen<?> cs) || Build.lastUsed == null || !Build.isMarked(Build.lastUsed)) return;
+			ScreenEvents.remove(screen).register(sc -> {
+				var m = new java.util.HashMap<net.minecraft.world.item.Item, Integer>();
+				for (var slot : cs.getMenu().slots) {
+					if (slot.container instanceof net.minecraft.world.entity.player.Inventory) continue;   // nur die Kiste, nicht das eigene Inventar
+					var st = slot.getItem(); if (!st.isEmpty()) m.merge(st.getItem(), st.getCount(), Integer::sum);
+				}
+				Build.containerSeen(m);
+			});
+		});
 		BlockplanLive.levels = () -> {
 			Minecraft mc = Minecraft.getInstance();
 			return mc.level == null ? List.of() : List.of(mc.level);
@@ -30,10 +70,18 @@ public class BlockplanLiveClient implements ClientModInitializer {
 			if (mc.level == null) return;
 			Stand.radius = Math.max(4, Math.min(16, mc.options.getEffectiveRenderDistance())); // so weit, wie das Spiel geladen hat
 			BlockplanLive.tickCommon();
+			while (keyShow.consumeClick()) Build.toggleShow();
+			while (keyMode.consumeClick()) Build.toggleMode();
+			while (keyUp.consumeClick()) Build.layerBy(1);
+			while (keyDown.consumeClick()) Build.layerBy(-1);
+			while (keyChest.consumeClick()) Build.toggleChest();
+			while (keyHud.consumeClick()) Build.hud = !Build.hud;
+			Build.tick(mc);
 		});
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, mc) -> {
 			var sd = mc.getCurrentServer();
 			BlockplanLive.switchWorld(sd != null ? sd.ip : "einzelspieler");
+			Build.switchWorld(sd != null ? sd.ip : mc.getSingleplayerServer() != null ? "sp-" + mc.getSingleplayerServer().getWorldData().getLevelName() : "einzelspieler");
 			if (!told) {
 				told = true;
 				mc.execute(() -> {

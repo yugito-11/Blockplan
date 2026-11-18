@@ -263,6 +263,19 @@
               <TextBlock x:Name="LiveProgress" Classes="note" FontWeight="SemiBold"/>
               <CheckBox x:Name="LiveProgChk" Content="Baufortschritt zeigen" IsChecked="True"/>
               <CheckBox x:Name="LiveSurrChk" Content="Umgebung aus der Welt zeigen" IsChecked="True"/>
+              <Border x:Name="BauBox" Background="{DynamicResource SunkBrush}" CornerRadius="8" Padding="10,8" IsVisible="False">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Bauen im Spiel" FontWeight="SemiBold"/>
+                  <TextBlock Classes="note" Text="Der Plan erscheint im Spiel als Geisterblöcke an der Startecke. Falsche Blöcke rot, gedrehte orange."/>
+                  <ComboBox x:Name="BauScope" HorizontalAlignment="Stretch" ToolTip.Tip="Welcher Teil soll im Spiel erscheinen?"/>
+                  <Button x:Name="BtnBauSend" Content="Plan ins Spiel" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <CheckBox x:Name="BauShow" Content="Zeigen" IsChecked="True"/>
+                    <CheckBox x:Name="BauLayer" Content="Nur eine Ebene"/>
+                  </StackPanel>
+                  <TextBlock x:Name="BauText" Classes="note" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
               <Border x:Name="NavBox" Background="{DynamicResource SunkBrush}" CornerRadius="8" Padding="10,8" IsVisible="False">
                 <StackPanel Spacing="6">
                   <TextBlock Text="Was fehlt noch?" FontWeight="SemiBold"/>

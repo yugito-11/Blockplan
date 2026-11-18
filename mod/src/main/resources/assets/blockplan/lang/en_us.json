@@ -1,0 +1,9 @@
+{
+  "key.category.blockplan.bauen": "Blockplan (build from plan)",
+  "key.blockplan.show": "Show/hide plan",
+  "key.blockplan.mode": "Layer / whole plan",
+  "key.blockplan.up": "Layer up",
+  "key.blockplan.down": "Layer down",
+  "key.blockplan.chest": "Mark/unmark storage chest",
+  "key.blockplan.hud": "Show/hide material list"
+}

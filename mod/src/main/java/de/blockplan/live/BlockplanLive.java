@@ -61,6 +61,16 @@ public class BlockplanLive implements ModInitializer {
 	static Supplier<Iterable<? extends Level>> levels = List::of;
 	static volatile boolean clientMode = false;
 	static Path standFile;
+	/** Bauen nach Plan (nur im Client): Plan und Ansicht aus Blockplan, Rückmeldung als Ereignis „bau“. */
+	public static volatile java.util.function.Consumer<String> planHandler, viewHandler;
+	public static volatile Runnable planClear;
+	static volatile String bauJson;
+
+	/** Ereignis an alle offenen Verbindungen (z. B. Fortschritt beim Bauen). */
+	public static void broadcast(String event, String data) {
+		if ("bau".equals(event)) bauJson = data;
+		for (WebServer.Client c : clients) c.send(event, data);
+	}
 
 	// Palette: Index 0 = Luft, 1 = nicht geladener Chunk
 	static final List<String> palIds = new ArrayList<>(List.of("minecraft:air", "blockplan:unloaded"));
@@ -159,7 +169,7 @@ public class BlockplanLive implements ModInitializer {
 		}
 	}
 
-	static String dimId(Level l) {
+	public static String dimId(Level l) {
 		return l.dimension().identifier().toString();
 	}
 

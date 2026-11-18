@@ -93,7 +93,7 @@ public partial class MainWindow : Window
             if (e.Key == Avalonia.Input.Key.PageUp) LayerSlider.Value = Math.Min(LayerSlider.Maximum, LayerSlider.Value + 1);
             if (e.Key == Avalonia.Input.Key.PageDown) LayerSlider.Value = Math.Max(0, LayerSlider.Value - 1);
         };
-        InitPlanning(); InitLive(); Init3DTools(); InitNavAndTimelapse();
+        InitPlanning(); InitLive(); Init3DTools(); InitNavAndTimelapse(); InitBau();
         Opened += async (_, _) => await Startup();
         Closing += (_, _) => store.Dispose();
     }
@@ -222,6 +222,94 @@ public partial class MainWindow : Window
         System.Runtime.InteropServices.Marshal.Copy(rgba, 0, bm.GetPixels(), rgba.Length);
         using var data = bm.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
         using var fs = File.Create(path); data.SaveTo(fs);
+    }
+
+    /* ---------- Bauen im Spiel (Mod im eigenen Spiel) ---------- */
+    bool bauBusy;
+
+    void InitBau()
+    {
+        BtnBauSend.Click += async (_, _) => await SendPlanToGame();
+        BauShow.IsCheckedChanged += (_, _) => { if (!bauBusy) _ = SendBauView(); };
+        BauLayer.IsCheckedChanged += (_, _) => { if (!bauBusy) _ = SendBauView(); };
+        // Schicht im 2D-Plan wechseln = Ebene im Spiel (wenn „Nur eine Ebene“ an ist)
+        LayerSlider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty && !bauBusy && BauLayer.IsChecked == true && live?.Bau != null) _ = SendBauView(); };
+    }
+
+    async Task SendBauView()
+    {
+        var lv = live; var p = project; if (lv == null || p == null) return;
+        int layer = (int)LayerSlider.Value - bauOffsetY;
+        await lv.SendView(BauShow.IsChecked == true, BauLayer.IsChecked == true, Math.Max(0, layer));
+    }
+
+    int bauOffsetY;   // Höhe des gesendeten Teils über der Projekt-Unterkante
+
+    async Task SendPlanToGame()
+    {
+        var p = project; var lv = live; if (p == null || lv == null) return;
+        var parts = BauScope.SelectedIndex > 0 && BauScope.SelectedIndex - 1 < bauScopes.Count ? BauScopeParts(bauScopes[BauScope.SelectedIndex - 1]) : null;
+        BtnBauSend.IsEnabled = false; BtnBauSend.Content = "Sende …";
+        string json = await Task.Run(() =>
+        {
+            if (parts == null || parts.Count == 0) { bauOffsetY = 0; return GameJson(p, 0, 0, 0, p.W - 1, p.H - 1, p.D - 1, null); }
+            int x0 = parts.Min(t => t.Box[0]), y0 = parts.Min(t => t.Box[1]), z0 = parts.Min(t => t.Box[2]), x1 = parts.Max(t => t.Box[3]), y1 = parts.Max(t => t.Box[4]), z1 = parts.Max(t => t.Box[5]);
+            bauOffsetY = y0;
+            return GameJson(p, x0, y0, z0, x1, y1, z1, (x, y, z) => parts.Any(t => InPart(t, x, y, z)));
+        });
+        var err = await lv.SendPlan(json);
+        BtnBauSend.IsEnabled = true; BtnBauSend.Content = "Plan ins Spiel";
+        if (err != null) { await Message("Plan nicht gesendet", err); return; }
+        await SendBauView();
+    }
+
+    /// <summary>Teil des Projekts als Projekt-JSON mit Welt-Startecke (für die Mod).</summary>
+    static string GameJson(Project p, int x0, int y0, int z0, int x1, int y1, int z1, Func<int, int, int, bool>? keep)
+    {
+        int W = x1 - x0 + 1, H = y1 - y0 + 1, D = z1 - z0 + 1;
+        var sub = new Project { Name = p.Name, W = W, H = H, D = D, Cells = new ushort[(long)W * H * D], OriginX = p.OriginX + x0, OriginY = p.OriginY + y0, OriginZ = p.OriginZ + z0 };
+        for (int y = 0; y < H; y++) for (int z = 0; z < D; z++) for (int x = 0; x < W; x++)
+        {
+            int v = p.At(x0 + x, y0 + y, z0 + z); if (v == 0 || (keep != null && !keep(x0 + x, y0 + y, z0 + z))) continue;
+            sub.Cells[sub.Index(x, y, z)] = (ushort)v;
+        }
+        return sub.ToJson();
+    }
+
+    List<string> bauScopes = new();
+    void FillBauScopes()
+    {
+        var keys = new List<string>(); var labels = new List<string> { "Ganzes Projekt" };
+        if (plan != null)
+        {
+            foreach (var st in plan.Stages) { keys.Add("s:" + st.Id); labels.Add("Etappe: " + st.Name); }
+            foreach (var t in plan.Parts.Where(x => !x.Base)) { keys.Add("p:" + t.Id); labels.Add("Bauplan: " + plan.Label(t)); }
+        }
+        bauScopes = keys; BauScope.ItemsSource = labels; BauScope.SelectedIndex = 0;
+    }
+
+    List<Part>? BauScopeParts(string key)
+    {
+        if (plan == null) return null; var parts = plan.Parts;
+        if (key.StartsWith("s:") && plan.Stages.FirstOrDefault(x => x.Id == key[2..]) is { } st) { var ids = st.Parts.ToHashSet(); return parts.Where(t => ids.Contains(t.Id)).ToList(); }
+        if (key.StartsWith("p:")) return parts.Where(x => x.Id == key[2..]).ToList();
+        return null;
+    }
+
+    void UpdateBauUi()
+    {
+        var b = live?.Bau; var p = project;
+        if (b == null) { BauText.Text = ""; return; }
+        bauBusy = true;
+        BauShow.IsChecked = b.Show; BauLayer.IsChecked = b.LayerMode;
+        if (b.LayerMode && p != null) { int ly = b.Layer + bauOffsetY; if ((int)LayerSlider.Value != ly && ly < p.H) LayerSlider.Value = ly; }   // Ebene im Spiel → 2D-Plan
+        bauBusy = false;
+        long inv = b.Inventory.Values.Sum(), lag = b.Storage.Values.Sum();
+        BauText.Text = b.Plan.Length == 0 ? "Im Spiel ist noch kein Plan geladen."
+            : $"Im Spiel: „{b.Plan}“ · {(b.LayerMode ? $"Ebene Y {(p?.OriginY ?? 0) + b.Layer + bauOffsetY}" : "ganzer Plan")}\n"
+              + (b.Scanned ? $"{b.Placed:N0} von {b.Total:N0} gesetzt ({(double)b.Placed / Math.Max(1, b.Total):P0})" : "zählt …")
+              + $"\n{b.Chests} Lagerkiste{(b.Chests == 1 ? "" : "n")} ({lag:N0} Items) · Inventar {inv:N0} Items";
+        if (MatPage.IsVisible) BuildMaterials();
     }
 
     void UpdateLightInfo()
@@ -379,6 +467,7 @@ public partial class MainWindow : Window
         {
             live = new LiveClient();
             live.StatusChanged += () => Dispatcher.UIThread.Post(UpdateLiveUi);
+            live.BauChanged += () => Dispatcher.UIThread.Post(UpdateBauUi);
             live.PlayersChanged += () => Dispatcher.UIThread.Post(() =>
             {
                 Plan.InvalidateVisual(); View3.SetPlayers();
@@ -418,6 +507,7 @@ public partial class MainWindow : Window
         LiveDot.Background = new SolidColorBrush(st switch { "live" => Color.Parse("#5fc27e"), "fehler" => Color.Parse("#ec6f66"), "aus" => Colors.Gray, _ => Color.Parse("#dc9a52") });
         BtnLiveStop.IsEnabled = live != null && st != "aus"; BtnLive.Content = live != null && st != "aus" ? "Neu verbinden" : "Verbinden";
         NavBox.IsVisible = live != null && live.Known;
+        BauBox.IsVisible = live != null && st != "aus";
         RenderLivePlayers();
     }
 
@@ -1062,7 +1152,7 @@ public partial class MainWindow : Window
         ApplyProjectToViews(refit);
         ApplyView();
         UpdateSnowInfo(); UpdateCounts(); RenderPoints(); RenderGuides();
-        layerCount = Array.Empty<long>(); FillMatScopes();
+        layerCount = Array.Empty<long>(); FillMatScopes(); FillBauScopes();
         if (tlOpen) CloseTimelapse();
         navSpots = new(); NavRow.IsVisible = false; NavText.Text = ""; BtnNavFind.Content = "Fehlende Stellen suchen";
         timelineCount = 0; LoadTimelineInfo();
@@ -1267,7 +1357,13 @@ public partial class MainWindow : Window
             matAll = items.OrderByDescending(kv => kv.Value).Select(kv =>
             {
                 int src = from.GetValueOrDefault(kv.Key), blk = Items.BlockFor(kv.Key, src);
-                return new MatRow { Name = ItemName(kv.Key, src), Count = kv.Value, StackText = Items.StackText(kv.Key, kv.Value), Icon = MatIcon(blk), Block = src, Replace = src > 0 ? new Cmd(() => _ = ReplaceBlocks(src)) : null };
+                var bau = live?.Bau; string have = "";
+                if (bau != null && bau.Plan.Length > 0)
+                {
+                    int inv = bau.Inventory.GetValueOrDefault(kv.Key), lag = bau.Storage.GetValueOrDefault(kv.Key);
+                    if (inv + lag > 0) have = $"  ·  da {inv + lag:N0}" + (lag > 0 ? $" (Lager {lag:N0})" : "");
+                }
+                return new MatRow { Name = ItemName(kv.Key, src), Count = kv.Value, StackText = Items.StackText(kv.Key, kv.Value) + have, Icon = MatIcon(blk), Block = src, Replace = src > 0 ? new Cmd(() => _ = ReplaceBlocks(src)) : null };
             }).ToList();
             var (slots, shulker, chests, dbl) = Items.Space(items);
             MatSpaceText.Text = $"Platz: {slots:N0} Stacks  ·  {shulker:0.#} Shulker-Kisten  ·  {dbl:0.#} Doppelkisten  ·  {Math.Ceiling(slots / 36.0):N0} volle Inventare";
