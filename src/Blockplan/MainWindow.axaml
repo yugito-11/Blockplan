@@ -57,6 +57,7 @@
               <TextBlock x:Name="InstallText" Classes="note" TextWrapping="Wrap" Text="Mit Eintrag im Startmenü, Symbol auf dem Desktop und unter Windows „Apps“. Deine Projekte bleiben erhalten."/>
               <CheckBox x:Name="InstallDesktop" Content="Symbol auf dem Desktop" IsChecked="True"/>
               <Button x:Name="BtnInstall" Content="Jetzt installieren" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+              <Button x:Name="BtnOpenInstalled" Content="Installierte Version öffnen" IsVisible="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
             </StackPanel>
           </Border>
           <Border x:Name="UpdateBox" IsVisible="False" Background="{DynamicResource AccentBrush}" CornerRadius="10" Padding="12,10" Margin="0,0,0,6">

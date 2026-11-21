@@ -68,6 +68,12 @@ public partial class MainWindow : Window
             if (err != null) { BtnInstall.IsEnabled = true; BtnInstall.Content = "Jetzt installieren"; await Message("Installieren fehlgeschlagen", err); return; }
             store.Dispose(); Environment.Exit(0);   // die installierte Kopie läuft schon
         };
+        BtnOpenInstalled.Click += async (_, _) =>
+        {
+            var err = Updater.ExePath is { } me ? Installer.Launch("--installed-from \"" + me + "\"") : "nur mit der Blockplan.exe";
+            if (err != null) { await Message("Öffnen fehlgeschlagen", err); return; }
+            store.Dispose(); Environment.Exit(0);
+        };
         BtnSnow.Click += async (_, _) => await RemoveSnow();
         BtnFit.Click += (_, _) => { Plan.ResetView(); View3.ResetView(); };
         ProjSel.SelectionChanged += async (_, _) => { if (!loadingUi && ProjSel.SelectedItem is ProjectInfo pi && pi.Id != project?.Id) await OpenProject(pi.Id); };
@@ -995,7 +1001,11 @@ public partial class MainWindow : Window
         Updater.CleanUp(); _ = CheckUpdate();
         // nicht installiert (z. B. aus „Downloads“ gestartet): Installieren anbieten
         InstallBox.IsVisible = Updater.ExePath != null && !Installer.IsInstalled;
-        if (Installer.Exists && !Installer.IsInstalled) { InstallText.Text = "Blockplan ist schon installiert – diese Datei ist eine zweite Kopie. Neu installieren ersetzt die installierte Version durch diese."; BtnInstall.Content = "Installation ersetzen"; }
+        if (Installer.Exists && !Installer.IsInstalled)
+        {
+            InstallText.Text = "Blockplan ist schon installiert – du hast gerade die heruntergeladene Datei geöffnet. Öffne die installierte Version (diese Datei wird dann gelöscht) oder ersetze sie.";
+            BtnInstall.Content = "Installation ersetzen"; BtnOpenInstalled.IsVisible = true; BtnOpenInstalled.Classes.Add("accent"); BtnInstall.Classes.Remove("accent");
+        }
         Installer.RefreshVersion();
         RefreshList(); UpdateDbInfo();
         if (double.TryParse(store.Get("sun"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var sa)) SunSlider.Value = sa;

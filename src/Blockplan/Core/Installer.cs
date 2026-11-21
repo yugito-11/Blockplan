@@ -36,14 +36,30 @@ public static class Installer
             // läuft dort schon eine alte Version? Datei umbenennen geht auch während sie läuft
             if (File.Exists(Target)) { var old = Target + ".old"; try { if (File.Exists(old)) File.Delete(old); } catch { } try { File.Move(Target, old); } catch { } }
             File.Copy(src, Target, true);
-            Shortcut(StartMenuLink, Target);
-            if (desktop) Shortcut(DesktopLink, Target);
-            Register();
-            // installierte Kopie starten; sie räumt die heruntergeladene Datei weg
-            Process.Start(new ProcessStartInfo(Target) { UseShellExecute = true, ArgumentList = { "--installed-from", src } });
+            // „Aus dem Internet geladen“-Markierung entfernen, sonst hält SmartScreen den Start an
+            try { File.Delete(Target + ":Zone.Identifier"); } catch { }
+            McAssets.Log("Installieren: kopiert nach " + Target);
+            try { Shortcut(StartMenuLink, Target); if (desktop) Shortcut(DesktopLink, Target); } catch (Exception e) { McAssets.Log("Verknüpfung: " + e.Message); }
+            try { Register(); } catch (Exception e) { McAssets.Log("Apps-Eintrag: " + e.Message); }
+            var err = Launch("--installed-from \"" + src + "\"");
+            if (err != null) return "Blockplan ist installiert, ließ sich aber nicht starten: " + err + "\nÖffne es über das Startmenü oder das Desktop-Symbol.";
             return null;
         }
         catch (Exception e) { McAssets.Log("Installieren: " + e); return e.Message; }
+    }
+
+    /// <summary>Installierte Kopie starten und prüfen, ob sie läuft (sonst Fehlermeldung statt still zu schließen).</summary>
+    public static string? Launch(string args = "")
+    {
+        try
+        {
+            var p = Process.Start(new ProcessStartInfo(Target, args) { UseShellExecute = false, WorkingDirectory = Dir });
+            if (p == null) return "Windows hat den Start abgelehnt.";
+            if (p.WaitForExit(4000)) { McAssets.Log($"Installierte Kopie sofort beendet (Code {p.ExitCode})"); return $"Die installierte Kopie hat sich sofort beendet (Code {p.ExitCode})."; }
+            McAssets.Log("Installierte Kopie läuft");
+            return null;
+        }
+        catch (Exception e) { McAssets.Log("Starten: " + e); return e.Message; }
     }
 
     /// <summary>Verknüpfung (.lnk) über die Windows-Shell anlegen.</summary>
