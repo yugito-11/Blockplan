@@ -64,7 +64,8 @@ public partial class MainWindow : Window
         {
             if (!OperatingSystem.IsWindows()) return;
             BtnInstall.IsEnabled = false; BtnInstall.Content = "Installiere …";
-            var err = await Task.Run(() => Installer.Install(InstallDesktop.IsChecked == true));
+            bool desktop = InstallDesktop.IsChecked == true;   // im UI-Thread lesen, nicht im Hintergrund
+            var err = await Task.Run(() => Installer.Install(desktop));
             if (err != null) { BtnInstall.IsEnabled = true; BtnInstall.Content = "Jetzt installieren"; await Message("Installieren fehlgeschlagen", err); return; }
             store.Dispose(); Environment.Exit(0);   // die installierte Kopie läuft schon
         };
