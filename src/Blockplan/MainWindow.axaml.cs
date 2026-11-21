@@ -60,6 +60,7 @@ public partial class MainWindow : Window
         BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
         BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
+        BtnReplaceSchem.Click += async (_, _) => await ReplaceSchematic();
         BtnInstall.Click += async (_, _) =>
         {
             if (!OperatingSystem.IsWindows()) return;
@@ -1242,6 +1243,43 @@ public partial class MainWindow : Window
         }
         catch (Exception e) { await Message("Fehler beim Übernehmen", e.Message); }
         finally { Busy(null); }
+    }
+
+    /// <summary>Blöcke des aktuellen Projekts durch eine Schematic ersetzen; Planung bleibt.</summary>
+    async Task ReplaceSchematic()
+    {
+        var p = project; if (p == null) return;
+        var f = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = $"Neue Schematic für „{p.Name}“",
+            FileTypeFilter = new[] { new FilePickerFileType("Schematic") { Patterns = new[] { "*.schem", "*.litematic", "*.nbt", "*.schematic" } } },
+        });
+        if (f.Count == 0 || f[0].TryGetLocalPath() is not { } path) return;
+        Busy("Lese " + Path.GetFileName(path) + " …");
+        Schem s;
+        try { s = await Task.Run(() => SchematicReader.Load(path, t => Dispatcher.UIThread.Post(() => BusyText.Text = t))); }
+        catch (Exception e) { Busy(null); await Message("Die Schematic konnte nicht gelesen werden", e.Message); return; }
+        Busy(null);
+        var r = await new SchemDialog(s).ShowDialog<SchemDialog.Result?>(this);
+        if (r == null) return;
+        Busy("Ersetze Blöcke …");
+        try
+        {
+            var (oldW, oldD, oldH) = (p.W, p.D, p.H);
+            await Task.Run(() =>
+            {
+                var np = SchematicReader.ToProject(s, r.X0, r.Y0, r.Z0, r.X1, r.Y1, r.Z1, r.Dewater, r.Plants, r.Rot, r.Desnow, r.SnowBlocks);
+                p.W = np.W; p.D = np.D; p.H = np.H; p.Cells = np.Cells; p.Banners = np.Banners;   // Name, Startecke und Planung bleiben
+                new PlanData(p).RecountParts();
+                store.Save(p);
+            });
+            s.Cells = Array.Empty<ushort>(); GC.Collect();
+            SetProject(p, oldW != p.W || oldD != p.D || oldH != p.H);
+            Busy(null);
+            if ((plan?.Parts.Count(t => !t.Base) ?? 0) > 0 && (oldW != p.W || oldD != p.D || oldH != p.H))
+                await Message("Schematic ersetzt", $"Die Größe hat sich geändert ({oldW}×{oldD}×{oldH} → {p.W}×{p.D}×{p.H}). Baupläne und Hilfslinien bleiben an derselben Stelle (von der Nordwest-Ecke aus) – prüf, ob sie noch passen.");
+        }
+        catch (Exception e) { Busy(null); await Message("Fehler beim Ersetzen", e.Message); }
     }
 
     async Task ImportArtifact()

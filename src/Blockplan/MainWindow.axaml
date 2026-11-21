@@ -359,6 +359,8 @@
                   <Button x:Name="BtnSnow" Content="Schnee entfernen" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
                 </StackPanel>
               </Border>
+              <Button x:Name="BtnReplaceSchem" Content="Schematic ersetzen …" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,6,0,0"
+                      ToolTip.Tip="Neue Blöcke aus einer Schematic, alles andere (Name, Startecke, Baupläne, Etappen, To-dos, Hilfslinien) bleibt"/>
               <Button x:Name="BtnDelete" Content="Projekt löschen" Foreground="{DynamicResource DangerBrush}" Margin="0,6,0,0"/>
             </StackPanel>
           </Border>

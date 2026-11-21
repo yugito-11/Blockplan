@@ -150,6 +150,14 @@ public static class SelfTest
                 Ok(back.SequenceEqual(ev) && s1[5] && s1[3] && !s1[900_000] && !s2[5] && s2[900_000], $"Zeitraffer: {back.Count} Ereignisse gespeichert und gelesen, Stand je Zeitpunkt stimmt");
             }
 
+            {   // Schematic ersetzen: Planung bleibt, Blockzahlen der Baupläne neu
+                var rp = Project.FromJson(ep2.ToJson()); var rpd = new PlanData(rp); int parts = rpd.Parts.Count; string name = rp.Name; int ox = rp.OriginX;
+                var np = SchematicReader.ToProject(schem, schem.X0, schem.Y0, schem.Z0, schem.X1, schem.Y1, schem.Z1, false, false, 0);
+                rp.W = np.W; rp.D = np.D; rp.H = np.H; rp.Cells = np.Cells; rp.Banners = np.Banners; rpd.RecountParts();
+                var back = Project.FromJson(rp.ToJson()); var bpd = new PlanData(back);
+                Ok(back.Name == name && back.OriginX == ox && bpd.Parts.Count == parts && back.W == np.W && bpd.Parts.All(t => t.N == bpd.Material(new[] { t }).Values.Sum()),
+                   $"Schematic ersetzen: {parts} Baupläne behalten, neue Größe {back.W}×{back.D}×{back.H}");
+            }
             var jar = McAssets.FindJar() ?? McAssets.DownloadAsync(new Progress<string>(s => { })).GetAwaiter().GetResult();
             var mc = McAssets.Load(jar); mc.LoadGermanAsync().GetAwaiter().GetResult();
             int withTex = ent.CountBlocks().Keys.Count(v => mc.FacesOf(v) != null || mc.CrossOf(v) != null);

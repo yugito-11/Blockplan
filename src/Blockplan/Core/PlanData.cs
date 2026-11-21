@@ -268,6 +268,12 @@ public sealed class PlanData
         return (c?.Name ?? "Bauteil") + " " + t.No + (t.Sub.Length > 0 ? " · " + t.Sub : "");
     }
 
+    /// <summary>Blockzahl jedes Bauplans neu zählen (nach dem Ersetzen der Schematic).</summary>
+    public void RecountParts()
+    {
+        foreach (var t in Parts) t.N = Material(new[] { t }).Values.Sum();
+    }
+
     /// <summary>Blöcke eines oder mehrerer Baupläne, nach Blockzustand gezählt (für die Umrechnung in Items).</summary>
     public Dictionary<int, long> States(IEnumerable<Part> parts)
     {
