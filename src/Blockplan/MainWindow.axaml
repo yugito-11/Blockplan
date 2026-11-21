@@ -51,6 +51,14 @@
         </Border>
 
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+          <Border x:Name="InstallBox" IsVisible="False" Background="{DynamicResource SunkBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,6">
+            <StackPanel Spacing="6">
+              <TextBlock Text="Blockplan installieren" FontWeight="SemiBold"/>
+              <TextBlock x:Name="InstallText" Classes="note" TextWrapping="Wrap" Text="Mit Eintrag im Startmenü, Symbol auf dem Desktop und unter Windows „Apps“. Deine Projekte bleiben erhalten."/>
+              <CheckBox x:Name="InstallDesktop" Content="Symbol auf dem Desktop" IsChecked="True"/>
+              <Button x:Name="BtnInstall" Content="Jetzt installieren" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            </StackPanel>
+          </Border>
           <Border x:Name="UpdateBox" IsVisible="False" Background="{DynamicResource AccentBrush}" CornerRadius="10" Padding="12,10" Margin="0,0,0,6">
             <StackPanel Spacing="6">
               <TextBlock x:Name="UpdateText" Foreground="White" TextWrapping="Wrap" FontSize="12.5"/>

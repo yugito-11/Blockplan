@@ -60,6 +60,14 @@ public partial class MainWindow : Window
         BtnUpdate.Click += (_, _) => { if (updateFile == null) return; try { store.Dispose(); Updater.ApplyAndRestart(updateFile); } catch (Exception ex) { UpdateText.Text = "Update fehlgeschlagen: " + ex.Message; } };
         BtnBrowserJar.Click += async (_, _) => await DownloadInBrowser();
         BtnDelete.Click += async (_, _) => await DeleteProject();
+        BtnInstall.Click += async (_, _) =>
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            BtnInstall.IsEnabled = false; BtnInstall.Content = "Installiere …";
+            var err = await Task.Run(() => Installer.Install(InstallDesktop.IsChecked == true));
+            if (err != null) { BtnInstall.IsEnabled = true; BtnInstall.Content = "Jetzt installieren"; await Message("Installieren fehlgeschlagen", err); return; }
+            store.Dispose(); Environment.Exit(0);   // die installierte Kopie läuft schon
+        };
         BtnSnow.Click += async (_, _) => await RemoveSnow();
         BtnFit.Click += (_, _) => { Plan.ResetView(); View3.ResetView(); };
         ProjSel.SelectionChanged += async (_, _) => { if (!loadingUi && ProjSel.SelectedItem is ProjectInfo pi && pi.Id != project?.Id) await OpenProject(pi.Id); };
@@ -985,6 +993,10 @@ public partial class MainWindow : Window
     async Task Startup()
     {
         Updater.CleanUp(); _ = CheckUpdate();
+        // nicht installiert (z. B. aus „Downloads“ gestartet): Installieren anbieten
+        InstallBox.IsVisible = Updater.ExePath != null && !Installer.IsInstalled;
+        if (Installer.Exists && !Installer.IsInstalled) { InstallText.Text = "Blockplan ist schon installiert – diese Datei ist eine zweite Kopie. Neu installieren ersetzt die installierte Version durch diese."; BtnInstall.Content = "Installation ersetzen"; }
+        Installer.RefreshVersion();
         RefreshList(); UpdateDbInfo();
         if (double.TryParse(store.Get("sun"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var sa)) SunSlider.Value = sa;
         if (store.Get("shaders") == "1" || Environment.GetEnvironmentVariable("BLOCKPLAN_SHADERS") == "1") { ShaderBtn.IsChecked = true; SunSlider.IsVisible = true; View3.SetShaders(true); }
